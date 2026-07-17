@@ -1,0 +1,85 @@
+name: Build and Release
+
+# Builds run only on GitHub (the repo is mirrored here from Gitea).
+# Pushing a version tag (e.g. v1.1) builds the program zip and the download
+# installer, then publishes both to a GitHub Release. Manual runs upload the
+# same two artifacts to the workflow run without creating a release.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (e.g. 1.1). Defaults to src/__init__.py."
+        required: false
+        default: ""
+
+permissions:
+  contents: write # required to create releases and upload assets
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r config/requirements-build.txt
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            v="${GITHUB_REF_NAME#v}"
+          elif [ -n "${{ github.event.inputs.version }}" ]; then
+            v="${{ github.event.inputs.version }}"
+          else
+            v="$(python -c "import pathlib,re; print(re.search(r'__version__\s*=\s*[\x27\x22]([^\x27\x22]+)', pathlib.Path('src/__init__.py').read_text()).group(1))")"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Building version $v"
+
+      - name: Build application
+        run: python scripts/build_exe.py
+
+      - name: Package program zip
+        shell: pwsh
+        # Zip the built app dir. The installer downloads this asset by the exact
+        # name OCR_File_Sorter.zip (releases/latest/download/OCR_File_Sorter.zip),
+        # so the name must not change.
+        run: Compress-Archive -Path "dist/OCR File Sorter/*" -DestinationPath "dist/OCR_File_Sorter.zip" -Force
+
+      - name: Build download installer
+        run: python scripts/build_installer_exe.py
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: OCR-File-Sorter-${{ steps.version.outputs.version }}
+          path: |
+            dist/OCR_File_Sorter.zip
+            dist/OCR_File_Sorter_Download_Installer.exe
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            "dist/OCR_File_Sorter.zip" \
+            "dist/OCR_File_Sorter_Download_Installer.exe" \
+            --title "OCR File Sorter ${GITHUB_REF_NAME}" \
+            --generate-notes

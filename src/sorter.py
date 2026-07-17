@@ -96,20 +96,6 @@ class Sorter:
 
         return text
 
-    def find_matching_destination(self, text):
-        """
-        Finds the first matching destination folder based on the phrases in the mapping.
-        """
-        if not self.mappings or not text:
-            return None
-        
-        text_lower = text.lower()
-        for phrase, rule in self.mappings.items():
-            if phrase.lower() in text_lower:
-                # The rule is a dictionary, get the destination from it
-                return rule.get("dest")
-        return None
-
     def find_destination(self, text):
         """
         Finds the destination folder by checking for keywords in the text.
@@ -119,49 +105,19 @@ class Sorter:
         # collapse multiple spaces, and convert to lowercase.
         normalized_text = ' '.join(text.split()).lower()
 
-        for phrase, destination in self.mapping_data.items():
+        for phrase, rule in self.mapping_data.items():
             # Normalize the mapping phrase in the same way.
             normalized_phrase = ' '.join(phrase.split()).lower()
             
             if normalized_phrase in normalized_text:
+                # New-format rules are dicts ({"name", "dest"}); migrated
+                # old-format rules are plain strings. Support both.
+                destination = rule.get("dest") if isinstance(rule, dict) else rule
                 if self.status_callback:
                     # Add a debug message to show exactly what matched.
                     self.status_callback(f"Found a match for keyword: '{normalized_phrase}'")
                 return destination
         return None
-
-    def sort_file(self, file_path):
-        """
-        Sorts a single file: reads its text, finds the matching destination,
-        and moves it to the appropriate folder.
-        """
-        if self.status_callback:
-            self.status_callback(f"Sorting file: {file_path}")
-
-        text = self.read_pdf_text(file_path)
-        if not text:
-            return
-
-        try:
-            destination_folder = self.find_matching_destination(text)
-
-            if destination_folder:
-                destination_path = os.path.join(self.template_dir, destination_folder)
-                os.makedirs(destination_path, exist_ok=True)
-                shutil.move(file_path, os.path.join(destination_path, os.path.basename(file_path)))
-                if self.status_callback:
-                    self.status_callback(f"Moved: {os.path.basename(file_path)} -> {destination_folder}")
-            else:
-                if self.status_callback:
-                    self.status_callback(f"No match found for: {os.path.basename(file_path)}")
-                    # Print the NORMALIZED text for easier debugging
-                    debug_text = ' '.join(text.split()).lower()
-                    if len(debug_text) > 1000:
-                        debug_text = debug_text[:1000] + "..."
-                    self.status_callback(f"--- Normalized Text Read from {os.path.basename(file_path)} ---\n{debug_text}\n---------------------------------")
-        except Exception as e:
-            if self.status_callback:
-                self.status_callback(f"Error processing {os.path.basename(file_path)}: {e}")
 
     def sort_files(self, folders_to_sort, deep_audit=False, first_page_only=False):
         total_files_sorted = 0

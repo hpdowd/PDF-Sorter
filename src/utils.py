@@ -23,6 +23,27 @@ def save_settings(settings):
     with open(SETTINGS_FILE, 'w') as f:
         json.dump(settings, f, indent=4)
 
+# --- Dialog helpers ---
+# These accept either show_x(message) or show_x(title, message), so both the
+# main window (single-arg) and the mapping editor (title + message) can use them.
+def show_error(title, message=None, parent=None):
+    """Show an error dialog."""
+    if message is None:
+        title, message = "Error", title
+    messagebox.showerror(title, message, parent=parent)
+
+def show_warning(title, message=None, parent=None):
+    """Show a warning dialog."""
+    if message is None:
+        title, message = "Warning", title
+    messagebox.showwarning(title, message, parent=parent)
+
+def show_info(title, message=None, parent=None):
+    """Show an informational dialog."""
+    if message is None:
+        title, message = "Information", title
+    messagebox.showinfo(title, message, parent=parent)
+
 class MappingUtils:
     """A utility class for handling mapping files."""
 
