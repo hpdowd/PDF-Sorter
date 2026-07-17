@@ -5,7 +5,7 @@ from tkinter import filedialog, messagebox, ttk
 from tkinterdnd2 import DND_FILES, TkinterDnD
 import threading
 
-from src import sorter, utils
+from src import sorter, utils, __version__
 from src.mapping_editor.editor_gui import MappingEditor
 from src.utils import (
     load_settings, save_settings,
@@ -15,7 +15,7 @@ from src.utils import (
 class FileSorterGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("OCR File Sorter")
+        self.root.title(f"OCR File Sorter v{__version__}")
         self.root.geometry("500x500")
         
         self.mapping_path = None
@@ -238,9 +238,6 @@ def main():
     root = TkinterDnD.Tk()
     app = FileSorterGUI(root)
     root.mainloop()
-
-if __name__ == "__main__":
-    main()
 
 if __name__ == "__main__":
     main()

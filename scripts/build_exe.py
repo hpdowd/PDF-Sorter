@@ -1,85 +1,109 @@
 """
 Build script for OCR File Sorter executable using PyInstaller.
-This script creates a standalone executable with all necessary dependencies.
+
+Creates a standalone Windows build with all necessary dependencies.
+
+Usage:
+    python scripts/build_exe.py          # release build (windowed, no console)
+    python scripts/build_exe.py debug    # debug build (console enabled for tracebacks)
+
+Paths are resolved from this file's location, so the script works from any
+working directory (local dev or a CI runner).
 """
 
-import PyInstaller.__main__
-import os
+import re
 import sys
+import PyInstaller.__main__
 from pathlib import Path
 
-def build_executable():
+# Resolve project layout from this file, not the current working directory.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SRC = PROJECT_ROOT / "src"
+
+
+def get_version():
+    """Read __version__ from src/__init__.py (single source of truth)."""
+    init_file = SRC / "__init__.py"
+    match = re.search(
+        r'__version__\s*=\s*["\']([^"\']+)["\']',
+        init_file.read_text(encoding="utf-8"),
+    )
+    return match.group(1) if match else "0.0.0"
+
+
+def build_executable(debug=False):
     """Build the executable using PyInstaller with all necessary options."""
-    
-    # Get the project root directory (parent of scripts)
-    current_dir = Path.cwd().parent
-    
-    # Define paths
-    main_script = current_dir / "src" / "main.py"
-    icon_path = current_dir / "src" / "icons" / "sorterIcon.ico"
-    
-    # Ensure the main script exists
+    main_script = SRC / "main.py"
+    icon_path = SRC / "icons" / "sorterIcon.ico"
+
     if not main_script.exists():
         print(f"Error: Main script not found at {main_script}")
         sys.exit(1)
-    
-    # Ensure the icon exists
-    if not icon_path.exists():
-        print(f"Warning: Icon file not found at {icon_path}")
-        icon_arg = []
-    else:
-        icon_arg = ['--icon', str(icon_path)]
-    
-    print("Building OCR File Sorter executable...")
+
+    version = get_version()
+    app_name = "OCR File Sorter Debug" if debug else "OCR File Sorter"
+    build_kind = "debug" if debug else "release"
+
+    print(f"Building {app_name} v{version} ({build_kind})...")
     print(f"Main script: {main_script}")
-    print(f"Output directory: {current_dir / 'dist'}")
-    
+    print(f"Output directory: {PROJECT_ROOT / 'dist' / app_name}")
+
     # PyInstaller arguments
     args = [
-        '--name=OCR File Sorter',
-        # Removed --onefile for directory mode (faster startup, smaller installer)
-        '--noconsole',
-        '--distpath=../dist',
-        '--workpath=../build',
-        '--specpath=../build',
-        # Add data files - use absolute paths
-        f'--add-data={current_dir}/src/icons/*;src/icons',
-        f'--add-data={current_dir}/src/mappings/example.json;src/mappings',
-        f'--add-data={current_dir}/src/mappings/example_template;src/mappings/example_template',
-        # Add hidden imports that might be needed
-        '--hidden-import=tkinter',
-        '--hidden-import=tkinterdnd2', 
-        '--hidden-import=PIL',
-        '--hidden-import=PIL._tkinter_finder',
-        '--hidden-import=fitz',
-        '--hidden-import=pymupdf',
-        '--hidden-import=pytesseract',
-        # More selective PyMuPDF inclusion (avoid dev files)
-        '--collect-submodules=fitz',
-        '--collect-submodules=pymupdf',
-        '--copy-metadata=pymupdf',
-        # Only collect essential binaries, exclude development files
-        '--collect-binaries=pymupdf',
-        '--exclude-module=pymupdf.mupdf-devel',
-        # Clean build
-        '--clean',
+        f"--name={app_name}",
+        # Directory mode (faster startup, smaller installer than --onefile).
+        # Release hides the console; debug keeps it so tracebacks are visible.
+        "--console" if debug else "--noconsole",
+        f"--distpath={PROJECT_ROOT / 'dist'}",
+        f"--workpath={PROJECT_ROOT / 'build'}",
+        f"--specpath={PROJECT_ROOT / 'build'}",
+        # Ensure `from src import gui` resolves during analysis.
+        f"--paths={PROJECT_ROOT}",
+        # Add data files.
+        f"--add-data={SRC / 'icons' / '*'};src/icons",
+        f"--add-data={SRC / 'mappings' / 'example.json'};src/mappings",
+        f"--add-data={SRC / 'mappings' / 'example_template'};src/mappings/example_template",
+        # Hidden imports that PyInstaller may miss.
+        "--hidden-import=tkinter",
+        "--hidden-import=tkinterdnd2",
+        "--hidden-import=PIL",
+        "--hidden-import=PIL._tkinter_finder",
+        "--hidden-import=fitz",
+        "--hidden-import=pymupdf",
+        "--hidden-import=pytesseract",
+        # More selective PyMuPDF inclusion (avoid dev files).
+        "--collect-submodules=fitz",
+        "--collect-submodules=pymupdf",
+        "--copy-metadata=pymupdf",
+        "--collect-binaries=pymupdf",
+        "--exclude-module=pymupdf.mupdf-devel",
+        # Clean build, no interactive prompts (safe for CI).
+        "--clean",
+        "--noconfirm",
     ]
-    
-    # Add icon if it exists
-    args.extend(icon_arg)
-    
-    # Add the main script
+
+    if debug:
+        args.append("--debug=noarchive")
+
+    if icon_path.exists():
+        args.extend(["--icon", str(icon_path)])
+    else:
+        print(f"Warning: Icon file not found at {icon_path}")
+
     args.append(str(main_script))
-    
+
     try:
         PyInstaller.__main__.run(args)
-        print("\n" + "="*50)
+        out_dir = PROJECT_ROOT / "dist" / app_name
+        print("\n" + "=" * 50)
         print("Build completed successfully!")
-        print(f"Executable location: {current_dir / 'dist' / 'OCR File Sorter' / 'OCR File Sorter.exe'}")
-        print("="*50)
+        print(f"Executable location: {out_dir / (app_name + '.exe')}")
+        print("=" * 50)
     except Exception as e:
         print(f"Build failed: {e}")
         sys.exit(1)
 
+
 if __name__ == "__main__":
-    build_executable()
+    is_debug = len(sys.argv) > 1 and sys.argv[1].lower() == "debug"
+    build_executable(debug=is_debug)

@@ -30,12 +30,13 @@ class DownloadBasedInstaller:
         
         # Configuration for download URLs
         self.app_config = {
-            # GitHub releases approach
+            # GitHub releases approach.
+            # NOTE: github_repo must be the GitHub *mirror* slug (owner/name).
             "github_repo": "Friedrice04/PDF-Sorter",
-            "release_tag": "v1.0",  # Specific version
-            
+            "release_tag": "latest",  # Always fetch the newest published release
+
             # Direct download URLs (primary)
-            "app_zip_url": "https://github.com/Friedrice04/PDF-Sorter/releases/download/v1.0/OCR_File_Sorter.zip",
+            "app_zip_url": "https://github.com/Friedrice04/PDF-Sorter/releases/latest/download/OCR_File_Sorter.zip",
             "fallback_url": "https://github.com/Friedrice04/PDF-Sorter/releases/latest/download/OCR_File_Sorter.zip",
             
             # Local file paths for testing (ENABLED for now)
