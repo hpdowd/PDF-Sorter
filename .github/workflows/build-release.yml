@@ -1,11 +1,21 @@
 name: Build and Release
 
 # Builds run only on GitHub (the repo is mirrored here from Gitea).
-# Pushing a version tag (e.g. v1.1) builds the program zip and the download
-# installer, then publishes both to a GitHub Release. Manual runs upload the
-# same two artifacts to the workflow run without creating a release.
+#
+# Versioning model (which branch builds what):
+#   * Push to main  -> always builds the program zip + installer. Publishes a
+#                      GitHub Release ONLY when the version in src/__init__.py
+#                      has not been released yet (tag v<version> doesn't exist).
+#                      So bumping __version__ and merging to main cuts a release;
+#                      ordinary commits to main just produce build artifacts.
+#   * Push a v* tag -> builds and publishes a release for that tag (kept as a
+#                      fallback; note Gitea mirror tag-pushes may not trigger it,
+#                      which is why main-push is the primary path).
+#   * Manual run    -> builds artifacts only, never releases (for test builds).
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   workflow_dispatch:
@@ -42,13 +52,17 @@ jobs:
         run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
             v="${GITHUB_REF_NAME#v}"
+            tag="${GITHUB_REF_NAME}"
           elif [ -n "${{ github.event.inputs.version }}" ]; then
             v="${{ github.event.inputs.version }}"
+            tag="v$v"
           else
             v="$(python -c "import pathlib,re; print(re.search(r'__version__\s*=\s*[\x27\x22]([^\x27\x22]+)', pathlib.Path('src/__init__.py').read_text()).group(1))")"
+            tag="v$v"
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
-          echo "Building version $v"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Building $tag (version $v)"
 
       - name: Build application
         run: python scripts/build_exe.py
@@ -72,14 +86,22 @@ jobs:
             dist/OCR_File_Sorter_Download_Installer.exe
           if-no-files-found: error
 
-      - name: Publish GitHub Release
-        if: github.ref_type == 'tag'
+      - name: Publish release (new versions only)
+        # Only on push events (main or tag), never on manual/test runs.
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
+          tag="${{ steps.version.outputs.tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists - skipping."
+            echo "Bump __version__ in src/__init__.py to publish the next version."
+            exit 0
+          fi
+          gh release create "$tag" \
             "dist/OCR_File_Sorter.zip" \
             "dist/OCR_File_Sorter_Download_Installer.exe" \
-            --title "OCR File Sorter ${GITHUB_REF_NAME}" \
+            --target "${{ github.sha }}" \
+            --title "OCR File Sorter $tag" \
             --generate-notes
