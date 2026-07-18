@@ -5,7 +5,7 @@ import shutil
 import tempfile
 import unittest
 
-from src.sorter import Sorter
+from src.sorter import Sorter, ocr_status
 from src import utils
 
 
@@ -18,6 +18,7 @@ def make_sorter(mapping_data, template_dir):
     s.template_dir = template_dir
     s.mapping_data = mapping_data
     s.naming_scheme = (mapping_data.get("_config") or {}).get("naming_scheme") or None
+    s._cancelled = False
     return s
 
 
@@ -299,6 +300,53 @@ class TestPlanExecuteUndo(unittest.TestCase):
         Sorter.undo(manifest)
         self.assertFalse(os.path.exists(self.inv("a.pdf")))
         self.assertTrue(os.path.exists(os.path.join(self.inp, "a.pdf")))
+
+
+class TestCancellation(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.inp = os.path.join(self.tmp, "input")
+        os.makedirs(self.inp)
+        self.tpl = os.path.join(self.tmp, "tpl")
+        os.makedirs(self.tpl)
+        for name in ("a.pdf", "b.pdf", "c.pdf"):
+            open(os.path.join(self.inp, name), "w").close()
+        self.s = make_sorter({"invoice": {"name": "Inv", "dest": "Invoices"}}, self.tpl)
+        self.s.read_pdf_text = lambda p, first_page_only=False: "this invoice"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def test_cancel_sets_flag(self):
+        self.assertFalse(self.s.cancelled)
+        self.s.cancel()
+        self.assertTrue(self.s.cancelled)
+
+    def test_cancel_before_plan_yields_nothing(self):
+        self.s.cancel()
+        self.assertEqual(self.s.plan([self.inp]), [])
+
+    def test_cancel_midway_stops_plan_early(self):
+        # progress_callback fires per file *after* the cancel check; cancelling in
+        # it means the first file completes but the next is skipped.
+        self.s.progress_callback = self.s.cancel
+        plan = self.s.plan([self.inp])
+        self.assertEqual(len(plan), 1)
+
+    def test_cancel_before_execute_moves_nothing(self):
+        plan = self.s.plan([self.inp])
+        self.assertEqual(len(plan), 3)
+        self.s.cancel()
+        manifest, count = self.s.execute(plan)
+        self.assertEqual((count, manifest), (0, []))
+
+
+class TestOcrStatus(unittest.TestCase):
+    def test_returns_bool_and_nonempty_detail(self):
+        available, detail = ocr_status()
+        self.assertIsInstance(available, bool)
+        self.assertIsInstance(detail, str)
+        self.assertTrue(detail)
 
 
 if __name__ == "__main__":
