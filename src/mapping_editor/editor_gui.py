@@ -66,6 +66,19 @@ class MappingEditor(tk.Toplevel):
         # --- Right Panel: Template Tree ---
         self._build_right_panel(paned)
 
+        # --- Optional filename scheme ---
+        scheme_frame = ttk.Frame(self)
+        scheme_frame.pack(fill="x", padx=10, pady=(0, 5))
+        ttk.Label(scheme_frame, text="Filename scheme:").pack(side="left")
+        self.scheme_var = tk.StringVar()
+        scheme_entry = ttk.Entry(scheme_frame, textvariable=self.scheme_var)
+        scheme_entry.pack(side="left", fill="x", expand=True, padx=(5, 0))
+        ToolTip(scheme_entry,
+                "Optional: rename sorted files. Placeholders: {rule_name} {phrase} "
+                "{original_filename} {date} {time} {ext}. "
+                "e.g. {rule_name}_{date} - {original_filename}{ext}. Blank = keep names.")
+        self.scheme_var.trace_add("write", lambda *a: self.set_dirty(True))
+
         # --- Bottom frame for Save/Cancel ---
         bottom_frame = ttk.Frame(self)
         bottom_frame.pack(fill="x", padx=10, pady=(0, 10))
@@ -151,7 +164,9 @@ class MappingEditor(tk.Toplevel):
         self.update_mapping_file_display(self.logic.mapping_path)
         self.refresh_mapping_table()
         self.refresh_template_tree()
-        self.set_dirty(self.logic.is_dirty)
+        dirty = self.logic.is_dirty
+        self.scheme_var.set(self.logic.get_naming_scheme())  # trace may flip dirty
+        self.set_dirty(dirty)
 
     def refresh_mapping_table(self):
         self.mapping_table.refresh(self.logic.mappings)

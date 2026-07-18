@@ -9,6 +9,7 @@ class EditorLogic:
     """
     def __init__(self):
         self.mappings = {}
+        self.config = {}          # reserved _config contents (e.g. naming scheme)
         self.mapping_path = None
         self.template_dir = None
         self.is_dirty = False
@@ -21,22 +22,42 @@ class EditorLogic:
             os.makedirs(self.template_dir)
         
         if utils.MappingUtils.is_valid_mapping_file(self.mapping_path):
-            self.mappings = utils.MappingUtils.load_mapping(self.mapping_path)
+            data = utils.MappingUtils.load_mapping(self.mapping_path)
         else:
-            self.mappings = {}
+            data = {}
+        # Keep the reserved _config (e.g. naming scheme) aside so the rules table
+        # shows only real rules; it's merged back on save.
+        self.config = data.pop("_config", {}) if isinstance(data.get("_config"), dict) else {}
+        self.mappings = data
         self.is_dirty = False
         return True
 
     def save_mappings(self):
-        """Saves the current mappings to the file."""
+        """Saves the current mappings (and any reserved config) to the file."""
         if not self.mapping_path:
             return False, "No mapping file selected."
         try:
-            utils.MappingUtils.save_mapping(self.mapping_path, self.mappings)
+            data = {"_config": self.config, **self.mappings} if self.config else dict(self.mappings)
+            utils.MappingUtils.save_mapping(self.mapping_path, data)
             self.is_dirty = False
             return True, "Mapping saved successfully."
         except Exception as e:
             return False, f"Could not save mapping:\n{e}"
+
+    def get_naming_scheme(self):
+        """The configured filename scheme (empty string if none)."""
+        return self.config.get("naming_scheme", "")
+
+    def set_naming_scheme(self, scheme):
+        """Set/clear the filename scheme; marks dirty only on an actual change."""
+        scheme = (scheme or "").strip()
+        if scheme == self.config.get("naming_scheme", ""):
+            return
+        if scheme:
+            self.config["naming_scheme"] = scheme
+        else:
+            self.config.pop("naming_scheme", None)
+        self.is_dirty = True
 
     def add_rule(self, phrase, name, dest):
         """Adds a new mapping rule."""
