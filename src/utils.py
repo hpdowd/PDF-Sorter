@@ -5,13 +5,24 @@ import tkinter as tk
 from tkinter import messagebox
 
 # --- Constants ---
-SETTINGS_FILE = "settings.json"
 LAST_MAPPING_KEY = "last_mapping_file"
 MAPPINGS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "mappings"))
 
+def _settings_path():
+    """Per-user settings location, independent of the launch directory.
+
+    Previously this was a bare 'settings.json' resolved against the current
+    working directory, so settings only persisted when launched from a specific
+    folder. Store it under the user's app-data directory instead.
+    """
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "OCR File Sorter", "settings.json")
+
+SETTINGS_FILE = _settings_path()
+
 # --- Settings Functions ---
 def load_settings():
-    """Loads the application settings from settings.json."""
+    """Loads the application settings from the per-user settings file."""
     try:
         with open(SETTINGS_FILE, 'r') as f:
             return json.load(f)
@@ -19,7 +30,8 @@ def load_settings():
         return {}
 
 def save_settings(settings):
-    """Saves the application settings to settings.json."""
+    """Saves the application settings to the per-user settings file."""
+    os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
     with open(SETTINGS_FILE, 'w') as f:
         json.dump(settings, f, indent=4)
 

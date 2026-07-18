@@ -101,7 +101,7 @@ class FileSorterGUI:
             options_frame, text="Deep Audit", variable=self.deep_audit
         )
         deep_audit_check.pack(side="left", padx=5)
-        utils.ToolTip(deep_audit_check, "If checked, recursively move misplaced files to their correct folders after sorting.")
+        utils.ToolTip(deep_audit_check, "If checked, also scan PDFs inside subfolders (recursive).")
 
         first_page_check = ttk.Checkbutton(
             options_frame, text="Scan first page only (faster)", variable=self.first_page_only

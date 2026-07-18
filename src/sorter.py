@@ -75,8 +75,9 @@ class Sorter:
                             self.status_callback(f"OCR page {i + 1}/{page_count} of {os.path.basename(file_path)}...")
                         # Render page to an image (pixmap) at high DPI for better accuracy
                         pix = page.get_pixmap(dpi=300)
-                        # Convert pixmap to a PIL Image
-                        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                        # Convert pixmap to a PIL Image (match mode to channels)
+                        mode = "RGBA" if pix.alpha else "RGB"
+                        img = Image.frombytes(mode, [pix.width, pix.height], pix.samples)
                         # Use Tesseract to do OCR on the image.
                         # NOTE: This requires Tesseract-OCR to be installed on your system.
                         page_text = pytesseract.image_to_string(img)
@@ -119,6 +120,33 @@ class Sorter:
                 return destination
         return None
 
+    def _iter_pdfs(self, folder, deep_audit):
+        """Yield PDF paths in a folder. With deep_audit, recurse into subfolders."""
+        if deep_audit:
+            for root, _dirs, files in os.walk(folder):
+                for filename in files:
+                    if filename.lower().endswith('.pdf'):
+                        yield os.path.join(root, filename)
+        else:
+            for filename in os.listdir(folder):
+                file_path = os.path.join(folder, filename)
+                if os.path.isfile(file_path) and filename.lower().endswith('.pdf'):
+                    yield file_path
+
+    @staticmethod
+    def _unique_path(directory, filename):
+        """Return a path in `directory` that won't overwrite an existing file."""
+        target = os.path.join(directory, filename)
+        if not os.path.exists(target):
+            return target
+        stem, ext = os.path.splitext(filename)
+        i = 1
+        while True:
+            candidate = os.path.join(directory, f"{stem} ({i}){ext}")
+            if not os.path.exists(candidate):
+                return candidate
+            i += 1
+
     def sort_files(self, folders_to_sort, deep_audit=False, first_page_only=False):
         total_files_sorted = 0
         total_files_scanned = 0
@@ -126,53 +154,45 @@ class Sorter:
         for folder in folders_to_sort:
             if not os.path.isdir(folder):
                 continue
-            
-            # In this version, we only scan the top-level of the provided folder
-            root = folder 
-            if self.status_callback:
-                self.status_callback(f"Sorting folder: {root}")
 
-            for filename in os.listdir(root):
-                file_path = os.path.join(root, filename)
-                
-                if os.path.isdir(file_path):
-                    # Skip directories in this version
+            if self.status_callback:
+                scope = "recursively" if deep_audit else "top-level"
+                self.status_callback(f"Sorting folder ({scope}): {folder}")
+
+            # Materialize the list before moving so files relocated during the
+            # sort don't disturb the os.walk in deep-audit mode.
+            for file_path in list(self._iter_pdfs(folder, deep_audit)):
+                filename = os.path.basename(file_path)
+                total_files_scanned += 1
+                if self.status_callback:
+                    self.status_callback(f"Scanning: {file_path}")
+
+                text = self.read_pdf_text(file_path, first_page_only=first_page_only)
+                if not text:
                     continue
-                
-                if filename.lower().endswith('.pdf'):
-                    total_files_scanned += 1
-                    if self.status_callback:
-                        self.status_callback(f"Scanning: {file_path}")
 
-                    text = self.read_pdf_text(file_path, first_page_only=first_page_only)
-                    if not text:
-                        continue
+                try:
+                    destination_folder = self.find_destination(text)
 
-                    try:
-                        destination_folder = self.find_destination(text)
-
-                        if destination_folder:
-                            destination_path = os.path.join(self.template_dir, destination_folder)
-                            os.makedirs(destination_path, exist_ok=True)
-                            shutil.move(file_path, os.path.join(destination_path, filename))
-                            total_files_sorted += 1
-                            if self.status_callback:
-                                self.status_callback(f"Moved: {filename} -> {destination_folder}")
-                        else:
-                            if self.status_callback:
-                                self.status_callback(f"No match found for: {filename}")
-                                # Print the NORMALIZED text for easier debugging
-                                debug_text = ' '.join(text.split()).lower()
-                                if len(debug_text) > 1000:
-                                    debug_text = debug_text[:1000] + "..."
-                                self.status_callback(f"--- Normalized Text Read from {filename} ---\n{debug_text}\n---------------------------------")
-                    except Exception as e:
+                    if destination_folder:
+                        destination_path = os.path.join(self.template_dir, destination_folder)
+                        os.makedirs(destination_path, exist_ok=True)
+                        target = self._unique_path(destination_path, filename)
+                        shutil.move(file_path, target)
+                        total_files_sorted += 1
                         if self.status_callback:
-                            self.status_callback(f"Error processing {filename}: {e}")
+                            self.status_callback(f"Moved: {filename} -> {destination_folder}")
+                    else:
+                        if self.status_callback:
+                            self.status_callback(f"No match found for: {filename}")
+                            # Print the NORMALIZED text for easier debugging
+                            debug_text = ' '.join(text.split()).lower()
+                            if len(debug_text) > 1000:
+                                debug_text = debug_text[:1000] + "..."
+                            self.status_callback(f"--- Normalized Text Read from {filename} ---\n{debug_text}\n---------------------------------")
+                except Exception as e:
+                    if self.status_callback:
+                        self.status_callback(f"Error processing {filename}: {e}")
 
-        if deep_audit:
-            if self.status_callback:
-                self.status_callback("Deep audit not yet implemented.")
-        
         if self.status_callback:
             self.status_callback(f"Sort complete. Scanned: {total_files_scanned}, Moved: {total_files_sorted}")
