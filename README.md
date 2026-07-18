@@ -71,7 +71,7 @@ PDF-Sorter/
 - **Custom Mappings**: Create your own sorting rules
 - **Multiple Phrases**: One rule can match several phrases (separate with `|`)
 - **Output Folder**: Choose where sorted files are filed
-- **Preview & Undo**: Review the plan before sorting; copy or move; undo the last sort
+- **Preview, Cancel & Undo**: Review the plan before sorting; stop a running sort; copy or move; undo the last sort
 - **Template System**: Predefined folder structures
 - **Batch Processing**: Sort multiple files at once
 - **File Naming**: Configurable output file naming schemes
@@ -79,8 +79,9 @@ PDF-Sorter/
 ### **User-Friendly Interface**
 - **Drag & Drop**: Easy folder selection
 - **Progress Tracking**: Real-time sorting progress
-- **Preferences**: Set scan defaults from the File menu
-- **CSV Export**: Save the sort preview for an audit trail
+- **Settings**: Scan options via the Settings button or File menu
+- **OCR Status**: Warns when Tesseract OCR isn't available
+- **CSV Export**: Save the sort preview (with the matched phrase) for an audit trail
 - **Persistent Logging**: Actions written to a per-user log file
 - **Mapping Editor**: Built-in rule editor with drag-to-assign destinations
 

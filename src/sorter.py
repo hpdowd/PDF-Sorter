@@ -32,11 +32,28 @@ try:
 except ImportError:
     OCR_AVAILABLE = False
 
+
+def ocr_status():
+    """Return (available, detail): whether OCR can actually run, plus a short note.
+
+    OCR needs both the Python libraries (Pillow/pytesseract) *and* the Tesseract
+    binary on PATH. pytesseract only fails at call time when the binary is
+    missing, so probe it here for a definitive answer at startup.
+    """
+    if not OCR_AVAILABLE:
+        return False, "OCR libraries not installed (Pillow/pytesseract)."
+    try:
+        version = pytesseract.get_tesseract_version()
+        return True, f"Tesseract {version}"
+    except Exception:
+        return False, "Tesseract OCR is not installed or not on PATH."
+
 class Sorter:
     def __init__(self, mapping_path, output_dir=None, progress_callback=None, status_callback=None):
         self.mapping_path = mapping_path
         self.progress_callback = progress_callback
         self.status_callback = status_callback
+        self._cancelled = False
         self.mapping_data = self.load_mapping()
         # Optional filename scheme, defined in the mapping under "_config".
         self.naming_scheme = (self.mapping_data.get("_config") or {}).get("naming_scheme") or None
@@ -51,6 +68,18 @@ class Sorter:
             self.template_dir = os.path.splitext(self.mapping_path)[0] + "_template"
         if not os.path.exists(self.template_dir):
             os.makedirs(self.template_dir)
+
+    def cancel(self):
+        """Request cooperative cancellation of an in-progress plan/execute.
+
+        The plan and execute loops check this between files, so a cancel stops at
+        the next file boundary rather than mid-copy.
+        """
+        self._cancelled = True
+
+    @property
+    def cancelled(self):
+        return self._cancelled
 
     def load_mapping(self):
         """
@@ -259,6 +288,8 @@ class Sorter:
         """
         items = []
         for folder in folders_to_sort:
+            if self._cancelled:
+                break
             if not os.path.isdir(folder):
                 continue
             if self.status_callback:
@@ -267,6 +298,8 @@ class Sorter:
 
             # Materialize before iterating so nothing shifts under us.
             for file_path in list(self._iter_pdfs(folder, deep_audit)):
+                if self._cancelled:
+                    break
                 if self.progress_callback:
                     self.progress_callback()
                 if self.status_callback:
@@ -300,6 +333,8 @@ class Sorter:
         """
         manifest = []
         for item in plan_items:
+            if self._cancelled:
+                break
             if item.status != "matched":
                 continue
             dest_dir = os.path.join(self.template_dir, item.dest)

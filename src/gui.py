@@ -33,6 +33,7 @@ class FileSorterGUI:
         self._progress_done = 0
         self.last_manifest = utils.load_manifest()  # enables Undo across restarts
         self.last_output_dir = None
+        self._active_sorter = None  # the Sorter of the running scan/sort, for Cancel
 
         self._build_widgets()
         self._populate_mappings()
@@ -52,7 +53,7 @@ class FileSorterGUI:
             "Folders to Sort:\n"
             "- Add one or more folders containing PDF files to be sorted.\n"
             "- You can drag and drop folders from Explorer into the list to add them quickly.\n\n"
-            "Preferences (File menu):\n"
+            "Settings (the Settings button, or File > Settings):\n"
             "- Deep Audit: also scan PDFs inside subfolders (recursive).\n"
             "- Scan first page only: faster; reads just the first page of each PDF.\n\n"
             "Mapping rules:\n"
@@ -65,11 +66,14 @@ class FileSorterGUI:
         messagebox.showinfo("Help - OCR File Sorter", message)
 
     def _show_about(self):
+        available, detail = sorter.ocr_status()
+        ocr_line = detail if available else f"unavailable — {detail}"
         messagebox.showinfo(
             "About OCR File Sorter",
             f"OCR File Sorter\nVersion {__version__}\n\n"
             "Sorts PDFs into folders based on their text content, "
-            "with an OCR fallback for scanned documents.",
+            "with an OCR fallback for scanned documents.\n\n"
+            f"OCR: {ocr_line}",
         )
 
     def _build_widgets(self):
@@ -145,6 +149,15 @@ class FileSorterGUI:
         self.undo_btn.pack(side="left", padx=(PAD, 0))
         utils.ToolTip(self.undo_btn, "Put the files from the last sort back where they were.")
 
+        self.cancel_btn = ttk.Button(button_row, text="Cancel", command=self._cancel_running_sort,
+                                     state="disabled")
+        self.cancel_btn.pack(side="left", padx=(PAD, 0))
+        utils.ToolTip(self.cancel_btn, "Stop the scan or sort that is currently running.")
+
+        self.settings_btn = ttk.Button(button_row, text="Settings", command=self._open_preferences)
+        self.settings_btn.pack(side="right")
+        utils.ToolTip(self.settings_btn, "Open Settings — scan options (deep audit, first page only).")
+
         # --- Status Bar ---
         status_frame = ttk.Frame(self.root)
         status_frame.pack(side="bottom", fill="x", padx=PAD, pady=(0, PAD))
@@ -152,6 +165,11 @@ class FileSorterGUI:
         self.status_label.pack(side="left")
         self.progress_bar = ttk.Progressbar(status_frame, orient="horizontal", mode="determinate")
         self.progress_bar.pack(side="right", fill="x", expand=True, padx=(PAD, 0))
+
+        # Persistent OCR warning, shown only when OCR can't run. Packed after the
+        # status bar (side=bottom) so it sits just above it when visible.
+        self.ocr_warning = ttk.Label(self.root, foreground="#9a6700", anchor="w")
+        self._update_ocr_indicator()
 
         self.folder_listbox.bind("<Configure>", lambda e: self._update_watermark())
 
@@ -165,7 +183,7 @@ class FileSorterGUI:
         menubar = tk.Menu(self.root)
 
         file_menu = tk.Menu(menubar, tearoff=0)
-        file_menu.add_command(label="Preferences...", command=self._open_preferences)
+        file_menu.add_command(label="Settings...", command=self._open_preferences)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.root.destroy)
         menubar.add_cascade(label="File", menu=file_menu)
@@ -283,6 +301,7 @@ class FileSorterGUI:
 
         self.sort_btn.config(state="disabled")
         self.undo_btn.config(state="disabled")
+        self.cancel_btn.config(state="normal")
         self.status_label.config(text="Scanning...")
         self.progress_bar['value'] = 0
         threading.Thread(
@@ -299,10 +318,14 @@ class FileSorterGUI:
                 status_callback=self.update_status,
                 progress_callback=self._on_progress,
             )
+            self._active_sorter = sorter_obj
             total = sorter_obj.count_pdfs(folders, deep_audit=deep_audit)
             self._progress_done = 0
             self.root.after(0, lambda: self.progress_bar.config(maximum=max(total, 1), value=0))
             plan = sorter_obj.plan(folders, deep_audit=deep_audit, first_page_only=first_page_only)
+            if sorter_obj.cancelled:
+                self.root.after(0, self._sort_cancelled)
+                return
             self.root.after(0, lambda: self._show_preview(sorter_obj, plan))
         except Exception as e:
             logger.exception("Planning failed")
@@ -333,8 +356,13 @@ class FileSorterGUI:
             unmatched = sum(1 for p in plan if p.status == "unmatched")
             problems = sum(1 for p in plan if p.status in ("error", "unreadable"))
             verb = "Copied" if copy else "Moved"
-            summary = (f"{verb} {count} file(s)."
-                       f"\nUnmatched: {unmatched}    Unreadable/errors: {problems}")
+            if sorter_obj.cancelled:
+                matched_total = sum(1 for p in plan if p.status == "matched")
+                summary = (f"Cancelled. {verb} {count} of {matched_total} file(s) before stopping."
+                           f"\nUse Undo to reverse them.")
+            else:
+                summary = (f"{verb} {count} file(s)."
+                           f"\nUnmatched: {unmatched}    Unreadable/errors: {problems}")
             self.root.after(0, lambda: self._after_execute(summary))
         except Exception as e:
             logger.exception("Execute failed")
@@ -351,8 +379,32 @@ class FileSorterGUI:
         utils.show_error(f"An error occurred:\n{error}")
         self._reset_after_sort()
 
+    def _cancel_running_sort(self):
+        """Ask the running Sorter to stop at the next file boundary."""
+        if self._active_sorter:
+            self._active_sorter.cancel()
+            self.cancel_btn.config(state="disabled")
+            self.status_label.config(text="Cancelling...")
+
+    def _sort_cancelled(self):
+        self._reset_after_sort()
+        self._refresh_undo_state()
+        self.status_label.config(text="Cancelled")
+
+    def _update_ocr_indicator(self):
+        """Show a persistent warning when OCR (Tesseract) can't run, hide it otherwise."""
+        available, detail = sorter.ocr_status()
+        if available:
+            self.ocr_warning.pack_forget()
+        else:
+            self.ocr_warning.config(
+                text=f"  ⚠  OCR unavailable — scanned/image PDFs can't be read.  {detail}")
+            self.ocr_warning.pack(side="bottom", fill="x")
+
     def _reset_after_sort(self):
         self.sort_btn.config(state="normal")
+        self.cancel_btn.config(state="disabled")
+        self._active_sorter = None
         self.status_label.config(text="Ready")
         self.progress_bar['value'] = 0
 
@@ -405,7 +457,7 @@ class PreferencesDialog(tk.Toplevel):
 
     def __init__(self, master, first_page_only, deep_audit):
         super().__init__(master)
-        self.title("Preferences")
+        self.title("Settings")
         self.transient(master)
         self.resizable(False, False)
         self.result = None
@@ -457,7 +509,7 @@ class SortPreviewDialog(tk.Toplevel):
     def __init__(self, master, plan):
         super().__init__(master)
         self.title("Preview sort")
-        self.geometry("640x430")
+        self.geometry("720x440")
         self.transient(master)
         self.confirmed = False
         self.copy_mode = False
@@ -475,13 +527,15 @@ class SortPreviewDialog(tk.Toplevel):
 
         frame = ttk.Frame(self)
         frame.pack(fill="both", expand=True, padx=10)
-        tree = ttk.Treeview(frame, columns=("outcome", "dest"), show="tree headings")
+        tree = ttk.Treeview(frame, columns=("outcome", "matched", "dest"), show="tree headings")
         tree.heading("#0", text="File")
         tree.heading("outcome", text="Outcome")
+        tree.heading("matched", text="Matched phrase")
         tree.heading("dest", text="Destination")
-        tree.column("#0", width=240)
-        tree.column("outcome", width=100, anchor="w")
-        tree.column("dest", width=260, anchor="w")
+        tree.column("#0", width=190)
+        tree.column("outcome", width=85, anchor="w")
+        tree.column("matched", width=125, anchor="w")
+        tree.column("dest", width=210, anchor="w")
         vsb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=vsb.set)
         tree.pack(side="left", fill="both", expand=True)
@@ -495,8 +549,9 @@ class SortPreviewDialog(tk.Toplevel):
         self._rows = matched + unmatched + problems
         for p in self._rows:
             dest = f"{p.dest}/{p.dest_name}" if p.status == "matched" else p.message
+            phrase = p.phrase if p.status == "matched" else ""
             tree.insert("", "end", text=p.filename,
-                        values=(self.STATUS_LABEL.get(p.status, p.status), dest),
+                        values=(self.STATUS_LABEL.get(p.status, p.status), phrase, dest),
                         tags=(p.status,))
 
         btns = ttk.Frame(self)
@@ -542,10 +597,11 @@ class SortPreviewDialog(tk.Toplevel):
         try:
             with open(path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-                writer.writerow(["File", "Outcome", "Destination"])
+                writer.writerow(["File", "Outcome", "Matched phrase", "Destination"])
                 for p in self._rows:
                     dest = f"{p.dest}/{p.dest_name}" if p.status == "matched" else p.message
-                    writer.writerow([p.filename, self.STATUS_LABEL.get(p.status, p.status), dest])
+                    phrase = p.phrase if p.status == "matched" else ""
+                    writer.writerow([p.filename, self.STATUS_LABEL.get(p.status, p.status), phrase, dest])
         except OSError as e:
             messagebox.showerror("Export failed", str(e), parent=self)
 
