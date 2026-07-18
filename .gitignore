@@ -8,6 +8,8 @@
 build/
 dist/
 EXE/
+# Stray PyInstaller onedir bundle if extracted/run in the repo root
+_internal/
 *.spec
 *.exe
 *.dmg
@@ -126,6 +128,11 @@ config/settings.json
 # Legacy misspelled settings file written by older versions
 setttigns.json
 config.json
+
+# Local-only files (not project deliverables)
+# PROJECT_OVERVIEW.md is local AI-agent context; demo_sort_test/ is manual test scratch
+PROJECT_OVERVIEW.md
+demo_sort_test/
 
 # Test outputs and temporary files
 tests/sorted/
