@@ -165,7 +165,7 @@ class EditorActions:
         if not selected_item:
             messagebox.showwarning("No Selection", "Please select a mapping to remove.", parent=self.view)
             return
-        phrase, _ = self.view.mapping_table.item(selected_item[0], "values")
+        _name, phrase, _dest = self.view.mapping_table.item(selected_item[0], "values")
         self.logic.remove_rule(phrase)
         self.view.refresh_mapping_table()
         self.view.set_dirty(True)
@@ -174,7 +174,7 @@ class EditorActions:
         """Handle moving a rule up or down."""
         selected_item = self.view.mapping_table.selection()
         if not selected_item: return
-        phrase, _ = self.view.mapping_table.item(selected_item[0], "values")
+        _name, phrase, _dest = self.view.mapping_table.item(selected_item[0], "values")
         if self.logic.move_rule(phrase, direction):
             self.view.refresh_mapping_table()
             # Reselect the item after refresh

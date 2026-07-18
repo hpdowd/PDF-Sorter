@@ -123,7 +123,8 @@ Icon
 # ================
 # User settings and configurations
 config/settings.json
-setttigns.json  # Keep typo for backward compatibility
+# Legacy misspelled settings file written by older versions
+setttigns.json
 config.json
 
 # Test outputs and temporary files
