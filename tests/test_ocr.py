@@ -77,7 +77,8 @@ class TestOCRFallback(unittest.TestCase):
     @patch('src.sorter.utils.MappingUtils.load_mapping')
     @patch('src.sorter.fitz.open')
     @patch('src.sorter.pytesseract.image_to_string')
-    def test_tesseract_not_found_error(self, mock_image_to_string, mock_fitz_open, mock_load_mapping):
+    @patch('src.sorter.Image.frombytes')
+    def test_tesseract_not_found_error(self, mock_frombytes, mock_image_to_string, mock_fitz_open, mock_load_mapping):
         """
         Tests that the system handles when the Tesseract executable is not installed.
         """
@@ -89,7 +90,9 @@ class TestOCRFallback(unittest.TestCase):
         mock_page.get_pixmap.return_value = MagicMock()
         mock_fitz_open.return_value = create_mock_document_context([mock_page])
 
-        # 2. Simulate Tesseract not being found on the system.
+        # 2. Give frombytes a valid return so we actually reach the OCR call,
+        #    then simulate Tesseract not being found on the system.
+        mock_frombytes.return_value = MagicMock()
         mock_image_to_string.side_effect = TesseractNotFoundError
 
         # 3. Initialize the Sorter.
@@ -99,7 +102,9 @@ class TestOCRFallback(unittest.TestCase):
         extracted_text = sorter.read_pdf_text('scanned_document.pdf')
 
         # --- Assert ---
-        # The function should fail gracefully and return an empty string.
+        # We actually reached the OCR call (which raised TesseractNotFoundError)...
+        mock_image_to_string.assert_called_once()
+        # ...and the function failed gracefully, returning an empty string.
         self.assertEqual(extracted_text, "")
         print("\n--- Tesseract Not Found Test Passed ---\nSuccessfully handled missing Tesseract executable.\n-----------------------------------")
 
