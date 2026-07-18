@@ -196,3 +196,5 @@ class Sorter:
 
         if self.status_callback:
             self.status_callback(f"Sort complete. Scanned: {total_files_scanned}, Moved: {total_files_sorted}")
+
+        return total_files_scanned, total_files_sorted

@@ -1,0 +1,137 @@
+"""Tests for the core sorting engine (Sorter) and mapping loading."""
+import os
+import json
+import shutil
+import tempfile
+import unittest
+
+from src.sorter import Sorter
+from src import utils
+
+
+def make_sorter(mapping_data, template_dir):
+    """Build a Sorter without touching the filesystem or the mapping loader."""
+    s = Sorter.__new__(Sorter)
+    s.status_callback = None
+    s.progress_callback = None
+    s.mapping_path = "x.json"
+    s.template_dir = template_dir
+    s.mapping_data = mapping_data
+    return s
+
+
+class TestFindDestination(unittest.TestCase):
+    def test_new_format_returns_dest(self):
+        s = make_sorter({"INVOICE": {"name": "Inv", "dest": "2024 Invoices"}}, "/tmp")
+        self.assertEqual(s.find_destination("this is an INVOICE for you"), "2024 Invoices")
+
+    def test_no_match_returns_none(self):
+        s = make_sorter({"INVOICE": {"name": "Inv", "dest": "X"}}, "/tmp")
+        self.assertIsNone(s.find_destination("nothing relevant here"))
+
+    def test_normalization_collapses_whitespace(self):
+        s = make_sorter({"Statement of Account": {"name": "S", "dest": "Statements"}}, "/tmp")
+        self.assertEqual(s.find_destination("...\n  statement   of\naccount ..."), "Statements")
+
+    def test_old_format_string_value_still_resolves(self):
+        s = make_sorter({"Receipt": "Receipts"}, "/tmp")
+        self.assertEqual(s.find_destination("a receipt attached"), "Receipts")
+
+    def test_first_match_wins_by_insertion_order(self):
+        s = make_sorter({
+            "alpha": {"name": "A", "dest": "DestA"},
+            "beta": {"name": "B", "dest": "DestB"},
+        }, "/tmp")
+        self.assertEqual(s.find_destination("alpha and beta present"), "DestA")
+
+
+class TestUniquePath(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def test_no_collision(self):
+        self.assertEqual(Sorter._unique_path(self.d, "a.pdf"), os.path.join(self.d, "a.pdf"))
+
+    def test_collision_appends_incrementing_counter(self):
+        open(os.path.join(self.d, "a.pdf"), "w").close()
+        self.assertEqual(Sorter._unique_path(self.d, "a.pdf"), os.path.join(self.d, "a (1).pdf"))
+        open(os.path.join(self.d, "a (1).pdf"), "w").close()
+        self.assertEqual(Sorter._unique_path(self.d, "a.pdf"), os.path.join(self.d, "a (2).pdf"))
+
+
+class TestSortFiles(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.inp = os.path.join(self.tmp, "input")
+        os.makedirs(os.path.join(self.inp, "sub"))
+        self.tpl = os.path.join(self.tmp, "tpl")
+        os.makedirs(self.tpl)
+        for name in ("a.pdf", "b.pdf"):
+            open(os.path.join(self.inp, name), "w").close()
+        open(os.path.join(self.inp, "sub", "c.pdf"), "w").close()
+        open(os.path.join(self.inp, "note.txt"), "w").close()  # non-pdf, must be ignored
+        self.s = make_sorter({"invoice": {"name": "Inv", "dest": "Invoices"}}, self.tpl)
+        self.s.read_pdf_text = lambda p, first_page_only=False: "this invoice"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def inv(self, *p):
+        return os.path.join(self.tpl, "Invoices", *p)
+
+    def test_top_level_only_skips_subfolders_and_non_pdf(self):
+        scanned, moved = self.s.sort_files([self.inp], deep_audit=False)
+        self.assertEqual((scanned, moved), (2, 2))
+        self.assertTrue(os.path.exists(self.inv("a.pdf")))
+        self.assertTrue(os.path.exists(self.inv("b.pdf")))
+        self.assertTrue(os.path.exists(os.path.join(self.inp, "sub", "c.pdf")))
+        self.assertTrue(os.path.exists(os.path.join(self.inp, "note.txt")))
+
+    def test_deep_audit_recurses_into_subfolders(self):
+        _, moved = self.s.sort_files([self.inp], deep_audit=True)
+        self.assertEqual(moved, 3)
+        self.assertTrue(os.path.exists(self.inv("c.pdf")))
+
+    def test_move_is_collision_safe(self):
+        self.s.sort_files([self.inp], deep_audit=False)
+        open(os.path.join(self.inp, "a.pdf"), "w").close()
+        self.s.sort_files([self.inp], deep_audit=False)
+        self.assertTrue(os.path.exists(self.inv("a (1).pdf")))
+
+    def test_no_match_moves_nothing(self):
+        self.s.read_pdf_text = lambda p, first_page_only=False: "unrelated text"
+        scanned, moved = self.s.sort_files([self.inp], deep_audit=False)
+        self.assertEqual((scanned, moved), (2, 0))
+
+
+class TestMappingLoading(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _write(self, data):
+        p = os.path.join(self.tmp, "m.json")
+        with open(p, "w") as f:
+            json.dump(data, f)
+        return p
+
+    def test_migrates_old_flat_format(self):
+        data = utils.MappingUtils.load_mapping(self._write({"IBAN": "01 Pay"}))
+        self.assertEqual(data["IBAN"]["dest"], "01 Pay")
+        self.assertIn("name", data["IBAN"])
+
+    def test_keeps_new_dict_format(self):
+        data = utils.MappingUtils.load_mapping(self._write({"IBAN": {"name": "Iban", "dest": "01 Pay"}}))
+        self.assertEqual(data["IBAN"]["dest"], "01 Pay")
+
+    def test_missing_file_returns_empty(self):
+        self.assertEqual(utils.MappingUtils.load_mapping("/no/such/file.json"), {})
+
+
+if __name__ == "__main__":
+    unittest.main()

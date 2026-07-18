@@ -218,13 +218,18 @@ class FileSorterGUI:
             first_page_only = self.first_page_only.get()
             
             self.root.after(0, lambda: self.progress_bar.config(maximum=len(folders)))
+            total_scanned = 0
+            total_moved = 0
             for i, folder in enumerate(folders):
                 if os.path.isdir(folder):
                     self.root.after(0, lambda f=folder: self.status_label.config(text=f"Sorting {os.path.basename(f)}..."))
-                    sorter_obj.sort_files([folder], deep_audit=deep_audit, first_page_only=first_page_only)
+                    scanned, moved = sorter_obj.sort_files([folder], deep_audit=deep_audit, first_page_only=first_page_only)
+                    total_scanned += scanned
+                    total_moved += moved
                 self.root.after(0, lambda v=i+1: self.progress_bar.config(value=v))
 
-            self.root.after(0, lambda: messagebox.showinfo("Success", "Files sorted successfully!"))
+            summary = f"Sorted {total_moved} of {total_scanned} PDF(s) scanned."
+            self.root.after(0, lambda: messagebox.showinfo("Sort complete", summary))
         except Exception as e:
             self.root.after(0, lambda: utils.show_error(f"An error occurred during sorting:\n{e}"))
         finally:
