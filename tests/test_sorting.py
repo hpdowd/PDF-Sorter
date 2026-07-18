@@ -106,6 +106,20 @@ class TestSortFiles(unittest.TestCase):
         scanned, moved = self.s.sort_files([self.inp], deep_audit=False)
         self.assertEqual((scanned, moved), (2, 0))
 
+    def test_deep_audit_skips_own_template_dir(self):
+        # Put the template dir *inside* the input folder with an already-sorted file.
+        inside_tpl = os.path.join(self.inp, "Invoices_template")
+        os.makedirs(os.path.join(inside_tpl, "Invoices"))
+        already = os.path.join(inside_tpl, "Invoices", "already.pdf")
+        open(already, "w").close()
+        s = make_sorter({"invoice": {"name": "Inv", "dest": "Invoices"}}, inside_tpl)
+        s.read_pdf_text = lambda p, first_page_only=False: "invoice"
+
+        scanned, moved = s.sort_files([self.inp], deep_audit=True)
+        # a.pdf, b.pdf, sub/c.pdf are scanned; already.pdf in the template is skipped.
+        self.assertEqual(scanned, 3)
+        self.assertTrue(os.path.exists(already))
+
 
 class TestMappingLoading(unittest.TestCase):
     def setUp(self):

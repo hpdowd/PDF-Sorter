@@ -121,9 +121,17 @@ class Sorter:
         return None
 
     def _iter_pdfs(self, folder, deep_audit):
-        """Yield PDF paths in a folder. With deep_audit, recurse into subfolders."""
+        """Yield PDF paths in a folder. With deep_audit, recurse into subfolders,
+        but skip the mapping's own template dir so files already sorted there
+        aren't picked up and moved again."""
         if deep_audit:
-            for root, _dirs, files in os.walk(folder):
+            template_abs = os.path.abspath(self.template_dir)
+            for root, dirs, files in os.walk(folder):
+                # Don't descend into the template dir (its files are already sorted).
+                dirs[:] = [d for d in dirs
+                           if os.path.abspath(os.path.join(root, d)) != template_abs]
+                if os.path.abspath(root) == template_abs:
+                    continue
                 for filename in files:
                     if filename.lower().endswith('.pdf'):
                         yield os.path.join(root, filename)
