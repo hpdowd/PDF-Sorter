@@ -10,7 +10,7 @@ from src.mapping_editor.template_tree import TemplateTree
 from src.mapping_editor.editor_logic import EditorLogic
 from src.mapping_editor.editor_actions import EditorActions
 
-MAPPINGS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../mappings"))
+MAPPINGS_DIR = utils.MAPPINGS_DIR
 
 class MappingEditor(tk.Toplevel):
     """

@@ -4,7 +4,7 @@ from tkinter import messagebox, simpledialog, ttk
 from src.mapping_editor.dialogs import NewMappingDialog, PatternDestDialog
 from src import utils
 
-MAPPINGS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../mappings"))
+MAPPINGS_DIR = utils.MAPPINGS_DIR
 
 class EditorActions:
     """

@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import shutil
 import logging
 from logging.handlers import RotatingFileHandler
 import tkinter as tk
@@ -8,7 +9,56 @@ from tkinter import messagebox
 
 # --- Constants ---
 LAST_MAPPING_KEY = "last_mapping_file"
-MAPPINGS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "mappings"))
+OUTPUT_DIR_KEY = "output_dir"
+DEEP_AUDIT_KEY = "deep_audit"
+FIRST_PAGE_KEY = "first_page_only"
+
+def _mappings_dir():
+    """Per-user, writable mappings directory.
+
+    Previously the mappings lived next to the code (``src/mappings``), which in a
+    frozen build resolves *inside* the app's ``_internal`` folder. That folder is
+    replaced on every update and removed on uninstall, so any mapping the user
+    created there — and the files sorted into its template tree — were silently
+    lost. Store mappings alongside settings/logs under the per-user app-data dir.
+    """
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "OCR File Sorter", "mappings")
+
+MAPPINGS_DIR = _mappings_dir()
+
+def _bundled_mappings_dir():
+    """Read-only default mappings shipped with the app (source tree or bundle)."""
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "mappings"))
+
+def ensure_mappings_seeded():
+    """Seed the per-user mappings dir with the bundled defaults on first run.
+
+    Only seeds when the per-user dir has no mapping files yet, so we never
+    resurrect a default the user deleted or overwrite their edits. Safe to call
+    repeatedly.
+    """
+    try:
+        os.makedirs(MAPPINGS_DIR, exist_ok=True)
+    except OSError:
+        logging.getLogger(LOGGER_NAME).exception("Could not create mappings dir")
+        return
+    if any(f.endswith(".json") for f in os.listdir(MAPPINGS_DIR)):
+        return  # already populated; leave the user's mappings alone
+    src_dir = _bundled_mappings_dir()
+    if not os.path.isdir(src_dir):
+        return
+    try:
+        for name in os.listdir(src_dir):
+            src = os.path.join(src_dir, name)
+            dst = os.path.join(MAPPINGS_DIR, name)
+            if os.path.isdir(src):
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+            elif not os.path.exists(dst):
+                shutil.copy2(src, dst)
+    except OSError:
+        logging.getLogger(LOGGER_NAME).exception("Failed to seed default mappings")
+
 # Reserved top-level keys in a mapping file that are config, not phrase rules.
 RESERVED_MAPPING_KEYS = ("_config",)
 
@@ -134,7 +184,7 @@ class MappingUtils:
     @staticmethod
     def get_available_mappings():
         """Returns a sorted list of available .json mapping files."""
-        os.makedirs(MAPPINGS_DIR, exist_ok=True)
+        ensure_mappings_seeded()
         return sorted([f for f in os.listdir(MAPPINGS_DIR) if f.endswith(".json")])
 
     @staticmethod

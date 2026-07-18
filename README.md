@@ -12,7 +12,7 @@ A PDF sorting application that automatically organizes documents based on their 
 ### For Developers
 ```bash
 # Clone and setup
-git clone https://github.com/Friedrice04/PDF-Sorter.git
+git clone https://git.henrydowd.dev/henry/PDF-Sorter.git
 cd PDF-Sorter
 
 # Create virtual environment
@@ -42,17 +42,18 @@ PDF-Sorter/
 │   ├── test_runner/       # PDF testing framework
 │   └── ...                   # Unit and integration tests
 ├── scripts/               # Build and utility scripts
-│   ├── build.bat            # Simple build script
-│   ├── build_complete.bat   # Complete build with installer
+│   ├── build.bat            # Build the app + distribution zip
+│   ├── build_installer.bat  # Build the download-based installer
+│   ├── build_complete.bat   # Build both app and installer
 │   ├── build_exe.py         # PyInstaller build script
-│   └── installer.py         # Unified installer (build & install)
+│   └── build_installer_exe.py # Installer build script
 ├── config/                # Configuration files
 │   ├── requirements.txt     # Runtime dependencies
 │   ├── requirements-build.txt # Build dependencies
 │   └── requirements-dev.txt # Development dependencies
 ├── docs/                  # Documentation
-│   ├── DISTRIBUTION_GUIDE.md # Distribution instructions
-│   └── INSTALLER_README.md  # Installer technical details
+│   ├── BUILD_SYSTEM.md      # Build system overview
+│   └── VERSIONING.md        # Versioning policy
 ├── build/                 # Build artifacts (ignored)
 ├── dist/                  # Distribution files
 └── quick-build.bat           # Quick build convenience script
@@ -68,15 +69,20 @@ PDF-Sorter/
 
 ### **Smart Sorting**
 - **Custom Mappings**: Create your own sorting rules
+- **Multiple Phrases**: One rule can match several phrases (separate with `|`)
+- **Output Folder**: Choose where sorted files are filed
+- **Preview & Undo**: Review the plan before sorting; copy or move; undo the last sort
 - **Template System**: Predefined folder structures
 - **Batch Processing**: Sort multiple files at once
 - **File Naming**: Configurable output file naming schemes
 
 ### **User-Friendly Interface**
-- **Drag & Drop**: Easy file selection
+- **Drag & Drop**: Easy folder selection
 - **Progress Tracking**: Real-time sorting progress
-- **Visual Feedback**: Clear status updates and error messages
-- **Mapping Editor**: Built-in rule editor with preview
+- **Preferences**: Set scan defaults from the File menu
+- **CSV Export**: Save the sort preview for an audit trail
+- **Persistent Logging**: Actions written to a per-user log file
+- **Mapping Editor**: Built-in rule editor with drag-to-assign destinations
 
 ### **Professional Features**
 - **Comprehensive Testing**: PDF testing framework included
@@ -97,17 +103,18 @@ quick-build.bat
 # 1. Install build dependencies
 pip install -r config/requirements-build.txt
 
-# 2. Build main application
+# 2. Build main application + distribution zip
 cd scripts
 python build_exe.py
 
-# 3. Create installer (optional)
-python installer.py --build
+# 3. Build the download installer (optional)
+python build_installer_exe.py
 ```
 
 ### Output Files
-- `dist/OCR File Sorter.exe` - Main application
-- `dist/OCR_File_Sorter_Installer.exe` - Complete installer
+- `dist/OCR File Sorter/OCR File Sorter.exe` - Main application
+- `dist/OCR_File_Sorter.zip` - Application package (uploaded to releases)
+- `dist/OCR_File_Sorter_Download_Installer.exe` - Download-based installer
 
 ## Testing
 
@@ -158,8 +165,8 @@ This project is licensed under the terms specified in LICENCE.txt.
 
 ## Documentation
 
-- [Distribution Guide](docs/DISTRIBUTION_GUIDE.md) - Complete distribution instructions
-- [Installer README](docs/INSTALLER_README.md) - Installer technical details
+- [Build System](docs/BUILD_SYSTEM.md) - Build scripts and their outputs
+- [Versioning Policy](docs/VERSIONING.md) - How releases are versioned and cut
 - [Test Runner Guide](tests/test_runner/README.md) - PDF testing framework
 
 ## Support

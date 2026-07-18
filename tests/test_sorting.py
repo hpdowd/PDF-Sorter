@@ -56,6 +56,16 @@ class TestFindDestination(unittest.TestCase):
         s = make_sorter({"invoice": {"name": "Bad", "dest": ""}}, "/tmp")
         self.assertIsNone(s.find_destination("this invoice"))
 
+    def test_multi_phrase_matches_any_alternative(self):
+        # A key can hold several phrases separated by '|'; any one appearing matches.
+        s = make_sorter({"invoice|receipt": {"name": "Billing", "dest": "Billing"}}, "/tmp")
+        self.assertEqual(s.find_destination("your RECEIPT is attached"), "Billing")
+        self.assertEqual(s.find_destination("this INVOICE is due"), "Billing")
+
+    def test_multi_phrase_no_alternative_present_returns_none(self):
+        s = make_sorter({"invoice|receipt": {"name": "Billing", "dest": "Billing"}}, "/tmp")
+        self.assertIsNone(s.find_destination("a statement of account"))
+
 
 class TestMappingValidation(unittest.TestCase):
     def test_warns_on_rules_missing_dest(self):

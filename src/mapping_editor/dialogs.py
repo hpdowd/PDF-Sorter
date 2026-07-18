@@ -11,6 +11,7 @@ Author: Your Name
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from src import utils
 
 class BaseDialog(tk.Toplevel):
     """A base class for creating modal dialogs using standard tkinter."""
@@ -106,7 +107,7 @@ class NewMappingDialog(BaseDialog):
             parent=self,
             title="Select Mapping File to Import",
             filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
-            initialdir=os.path.abspath(os.path.join(os.path.dirname(__file__), "../mappings"))
+            initialdir=utils.MAPPINGS_DIR
         )
         if path:
             self.import_path_var.set(path)
@@ -145,8 +146,13 @@ class PatternDestDialog(BaseDialog):
 
         ttk.Label(master, text="Phrase/Keyword (must be unique):").pack(anchor="w", pady=(0, 2))
         self.phrase_entry = ttk.Entry(master, width=50)
-        self.phrase_entry.pack(fill="x", expand=True, pady=(0, 10))
+        self.phrase_entry.pack(fill="x", expand=True, pady=(0, 2))
         self.phrase_entry.insert(0, self.initial_phrase)
+        ttk.Label(
+            master,
+            text="Tip: separate alternatives with |  e.g. invoice|receipt  (matches if any appears)",
+            foreground="#57606a",
+        ).pack(anchor="w", pady=(0, 10))
 
         ttk.Label(master, text="Destination Folder:").pack(anchor="w", pady=(0, 2))
         self.dest_combo = ttk.Combobox(master, values=self.destinations, width=47)
