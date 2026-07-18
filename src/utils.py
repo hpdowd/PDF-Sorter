@@ -1,12 +1,51 @@
 import os
 import sys
 import json
+import logging
+from logging.handlers import RotatingFileHandler
 import tkinter as tk
 from tkinter import messagebox
 
 # --- Constants ---
 LAST_MAPPING_KEY = "last_mapping_file"
 MAPPINGS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "mappings"))
+
+# --- Logging ---
+LOGGER_NAME = "ocr_file_sorter"
+
+def _log_path():
+    """Per-user log file location (alongside settings, independent of CWD)."""
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "OCR File Sorter", "logs", "ocr-file-sorter.log")
+
+LOG_FILE = _log_path()
+
+# A NullHandler on the base logger avoids the stdlib "last resort" stderr output
+# when the app hasn't called setup_logging() (e.g. during tests or library use).
+logging.getLogger(LOGGER_NAME).addHandler(logging.NullHandler())
+
+def setup_logging(level=logging.INFO):
+    """Attach a rotating file handler under the per-user log dir. Idempotent.
+
+    Returns the log file path. If the log file can't be created, the app keeps
+    running (logging just goes nowhere).
+    """
+    logger = logging.getLogger(LOGGER_NAME)
+    if any(not isinstance(h, logging.NullHandler) for h in logger.handlers):
+        return LOG_FILE  # already configured
+    logger.setLevel(level)
+    try:
+        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+        handler = RotatingFileHandler(
+            LOG_FILE, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+        )
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+        logger.addHandler(handler)
+    except OSError:
+        pass
+    return LOG_FILE
 
 def _settings_path():
     """Per-user settings location, independent of the launch directory.

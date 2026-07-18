@@ -1,11 +1,14 @@
 import os
 import json
+import logging
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from tkinterdnd2 import DND_FILES, TkinterDnD
 import threading
 
 from src import sorter, utils, __version__
+
+logger = logging.getLogger("ocr_file_sorter.gui")
 from src.mapping_editor.editor_gui import MappingEditor
 from src.utils import (
     load_settings, save_settings,
@@ -38,7 +41,8 @@ class FileSorterGUI:
             "When enabled, the tool will recursively scan all subdirectories for PDF files to sort.\n\n"
             "First Page Only:\n"
             "When enabled, only scans the first page of each PDF for faster processing.\n\n"
-            "Use the Mapping Editor to create or modify sorting rules based on PDF content.\n"
+            "Use the Mapping Editor to create or modify sorting rules based on PDF content.\n\n"
+            f"Logs are written to:\n{utils.LOG_FILE}\n"
         )
         messagebox.showinfo("Help - OCR File Sorter", message)
 
@@ -231,6 +235,7 @@ class FileSorterGUI:
             summary = f"Sorted {total_moved} of {total_scanned} PDF(s) scanned."
             self.root.after(0, lambda: messagebox.showinfo("Sort complete", summary))
         except Exception as e:
+            logger.exception("Sorting failed")
             self.root.after(0, lambda: utils.show_error(f"An error occurred during sorting:\n{e}"))
         finally:
             def final_update():
@@ -240,6 +245,8 @@ class FileSorterGUI:
             self.root.after(0, final_update)
 
 def main():
+    utils.setup_logging()
+    logger.info("OCR File Sorter v%s starting", __version__)
     root = TkinterDnD.Tk()
     app = FileSorterGUI(root)
     root.mainloop()
