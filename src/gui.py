@@ -246,7 +246,7 @@ class FileSorterGUI:
             self.root.after(0, lambda: self._show_preview(sorter_obj, plan))
         except Exception as e:
             logger.exception("Planning failed")
-            self.root.after(0, lambda: self._sort_error(e))
+            self.root.after(0, lambda err=e: self._sort_error(err))
 
     def _show_preview(self, sorter_obj, plan):
         if not plan:
@@ -278,7 +278,7 @@ class FileSorterGUI:
             self.root.after(0, lambda: self._after_execute(summary))
         except Exception as e:
             logger.exception("Execute failed")
-            self.root.after(0, lambda: self._sort_error(e))
+            self.root.after(0, lambda err=e: self._sort_error(err))
 
     def _after_execute(self, summary):
         self._reset_after_sort()
