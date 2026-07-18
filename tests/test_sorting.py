@@ -234,5 +234,62 @@ class TestMappingLoading(unittest.TestCase):
         self.assertEqual(utils.MappingUtils.load_mapping("/no/such/file.json"), {})
 
 
+class TestPlanExecuteUndo(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.inp = os.path.join(self.tmp, "in")
+        os.makedirs(self.inp)
+        self.tpl = os.path.join(self.tmp, "tpl")
+        os.makedirs(self.tpl)
+        for n in ("a.pdf", "b.pdf", "nomatch.pdf"):
+            open(os.path.join(self.inp, n), "w").close()
+        self.s = make_sorter({"invoice": {"name": "Inv", "dest": "Invoices"}}, self.tpl)
+        self.s.read_pdf_text = lambda p, first_page_only=False: (
+            "unrelated" if os.path.basename(p) == "nomatch.pdf" else "an invoice")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def inv(self, name):
+        return os.path.join(self.tpl, "Invoices", name)
+
+    def test_plan_is_non_destructive_and_classifies(self):
+        plan = self.s.plan([self.inp], deep_audit=False)
+        status = {i.filename: i.status for i in plan}
+        self.assertEqual(status["a.pdf"], "matched")
+        self.assertEqual(status["nomatch.pdf"], "unmatched")
+        # Nothing moved by planning.
+        self.assertTrue(os.path.exists(os.path.join(self.inp, "a.pdf")))
+        self.assertFalse(os.path.exists(self.inv("a.pdf")))
+
+    def test_execute_move_and_manifest(self):
+        manifest, count = self.s.execute(self.s.plan([self.inp]), copy=False)
+        self.assertEqual(count, 2)
+        self.assertTrue(os.path.exists(self.inv("a.pdf")))
+        self.assertFalse(os.path.exists(os.path.join(self.inp, "a.pdf")))
+        self.assertEqual(len(manifest), 2)
+        self.assertFalse(any(e["copied"] for e in manifest))
+
+    def test_execute_copy_keeps_original(self):
+        manifest, count = self.s.execute(self.s.plan([self.inp]), copy=True)
+        self.assertEqual(count, 2)
+        self.assertTrue(os.path.exists(os.path.join(self.inp, "a.pdf")))  # original stays
+        self.assertTrue(os.path.exists(self.inv("a.pdf")))
+        self.assertTrue(all(e["copied"] for e in manifest))
+
+    def test_undo_move_restores_originals(self):
+        manifest, _ = self.s.execute(self.s.plan([self.inp]), copy=False)
+        undone, errors = Sorter.undo(manifest)
+        self.assertEqual((undone, errors), (2, 0))
+        self.assertTrue(os.path.exists(os.path.join(self.inp, "a.pdf")))
+        self.assertFalse(os.path.exists(self.inv("a.pdf")))
+
+    def test_undo_copy_deletes_copies(self):
+        manifest, _ = self.s.execute(self.s.plan([self.inp]), copy=True)
+        Sorter.undo(manifest)
+        self.assertFalse(os.path.exists(self.inv("a.pdf")))
+        self.assertTrue(os.path.exists(os.path.join(self.inp, "a.pdf")))
+
+
 if __name__ == "__main__":
     unittest.main()

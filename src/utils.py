@@ -76,6 +76,37 @@ def save_settings(settings):
     with open(SETTINGS_FILE, 'w') as f:
         json.dump(settings, f, indent=4)
 
+# --- Sort manifest (for Undo, persisted so it survives a restart) ---
+def _manifest_path():
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "OCR File Sorter", "last_sort.json")
+
+MANIFEST_FILE = _manifest_path()
+
+def save_manifest(entries):
+    """Persist the last sort's move manifest (list of {src,dest,copied})."""
+    try:
+        os.makedirs(os.path.dirname(MANIFEST_FILE), exist_ok=True)
+        with open(MANIFEST_FILE, "w", encoding="utf-8") as f:
+            json.dump({"entries": entries}, f, indent=2)
+    except OSError:
+        pass
+
+def load_manifest():
+    """Return the last saved manifest entries, or [] if none/unreadable."""
+    try:
+        with open(MANIFEST_FILE, "r", encoding="utf-8") as f:
+            return json.load(f).get("entries", [])
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+
+def clear_manifest():
+    """Remove the persisted manifest (after a successful undo)."""
+    try:
+        os.remove(MANIFEST_FILE)
+    except OSError:
+        pass
+
 # --- Dialog helpers ---
 # These accept either show_x(message) or show_x(title, message), so both the
 # main window (single-arg) and the mapping editor (title + message) can use them.

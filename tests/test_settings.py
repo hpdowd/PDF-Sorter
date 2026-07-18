@@ -35,6 +35,20 @@ class TestSettings(unittest.TestCase):
         finally:
             utils.SETTINGS_FILE = original
 
+    def test_manifest_roundtrip_and_clear(self):
+        tmp = tempfile.mkdtemp()
+        original = utils.MANIFEST_FILE
+        utils.MANIFEST_FILE = os.path.join(tmp, "nested", "last_sort.json")
+        entries = [{"src": "a.pdf", "dest": "X/a.pdf", "copied": False}]
+        try:
+            utils.save_manifest(entries)
+            self.assertEqual(utils.load_manifest(), entries)
+            utils.clear_manifest()
+            self.assertEqual(utils.load_manifest(), [])
+        finally:
+            utils.MANIFEST_FILE = original
+            shutil.rmtree(tmp)
+
 
 if __name__ == "__main__":
     unittest.main()

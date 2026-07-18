@@ -27,8 +27,13 @@ class FileSorterGUI:
         self.first_page_only = tk.BooleanVar(value=True) # Default to True for speed
         self.root.minsize(300, 220)
 
+        self._progress_done = 0
+        self.last_manifest = utils.load_manifest()  # enables Undo across restarts
+        self.last_output_dir = None
+
         self._build_widgets()
         self._populate_mappings()
+        self._refresh_undo_state()
 
     def _show_help(self):
         message = (
@@ -119,7 +124,11 @@ class FileSorterGUI:
 
         self.sort_btn = ttk.Button(button_row, text="Sort Files", command=self._start_sort_thread)
         self.sort_btn.pack(side="left")
-        utils.ToolTip(self.sort_btn, "Start sorting PDF files according to the selected options.")
+        utils.ToolTip(self.sort_btn, "Preview the sort, then choose Move or Copy.")
+
+        self.undo_btn = ttk.Button(button_row, text="Undo Last Sort", command=self._undo_last_sort, state="disabled")
+        self.undo_btn.pack(side="left", padx=(5, 0))
+        utils.ToolTip(self.undo_btn, "Put the files from the last sort back where they were.")
 
         help_btn = ttk.Button(button_row, text="Help", command=self._show_help)
         help_btn.pack(side="right")
@@ -201,57 +210,217 @@ class FileSorterGUI:
         self.root.after(0, lambda: self.progress_bar.config(value=done))
 
     def _start_sort_thread(self):
-        self.sort_btn.config(state="disabled")
-        self.status_label.config(text="Starting sort...")
-        self.progress_bar['value'] = 0
-        thread = threading.Thread(target=self._sort_files, daemon=True)
-        thread.start()
-
-    def _sort_files(self):
+        # Validate on the main thread, then scan/plan in the background.
         mapping_path = self.mapping_path
-        folders = self.folder_listbox.get(0, tk.END)
+        folders = list(self.folder_listbox.get(0, tk.END))
         if not mapping_path or not os.path.isfile(mapping_path):
-            self.root.after(0, lambda: utils.show_error("Please select a valid mapping file."))
-            self.root.after(0, lambda: self.sort_btn.config(state="normal"))
+            utils.show_error("Please select a valid mapping file.")
             return
         if not folders:
-            self.root.after(0, lambda: utils.show_error("Please add at least one folder to sort."))
-            self.root.after(0, lambda: self.sort_btn.config(state="normal"))
+            utils.show_error("Please add at least one folder to sort.")
             return
+        deep_audit = self.deep_audit.get()
+        first_page_only = self.first_page_only.get()
 
+        self.sort_btn.config(state="disabled")
+        self.undo_btn.config(state="disabled")
+        self.status_label.config(text="Scanning...")
+        self.progress_bar['value'] = 0
+        threading.Thread(
+            target=self._plan_and_preview,
+            args=(mapping_path, folders, deep_audit, first_page_only),
+            daemon=True,
+        ).start()
+
+    def _plan_and_preview(self, mapping_path, folders, deep_audit, first_page_only):
         try:
             sorter_obj = sorter.Sorter(
                 mapping_path,
                 status_callback=self.update_status,
                 progress_callback=self._on_progress,
             )
-            deep_audit = self.deep_audit.get()
-            first_page_only = self.first_page_only.get()
-
-            total_pdfs = sorter_obj.count_pdfs(folders, deep_audit=deep_audit)
+            total = sorter_obj.count_pdfs(folders, deep_audit=deep_audit)
             self._progress_done = 0
-            self.root.after(0, lambda: self.progress_bar.config(maximum=max(total_pdfs, 1), value=0))
-
-            total_scanned = 0
-            total_moved = 0
-            for folder in folders:
-                if os.path.isdir(folder):
-                    self.root.after(0, lambda f=folder: self.status_label.config(text=f"Sorting {os.path.basename(f)}..."))
-                    scanned, moved = sorter_obj.sort_files([folder], deep_audit=deep_audit, first_page_only=first_page_only)
-                    total_scanned += scanned
-                    total_moved += moved
-
-            summary = f"Sorted {total_moved} of {total_scanned} PDF(s) scanned."
-            self.root.after(0, lambda: messagebox.showinfo("Sort complete", summary))
+            self.root.after(0, lambda: self.progress_bar.config(maximum=max(total, 1), value=0))
+            plan = sorter_obj.plan(folders, deep_audit=deep_audit, first_page_only=first_page_only)
+            self.root.after(0, lambda: self._show_preview(sorter_obj, plan))
         except Exception as e:
-            logger.exception("Sorting failed")
-            self.root.after(0, lambda: utils.show_error(f"An error occurred during sorting:\n{e}"))
-        finally:
-            def final_update():
-                self.sort_btn.config(state="normal")
-                self.status_label.config(text="Ready")
-                self.progress_bar['value'] = 0
-            self.root.after(0, final_update)
+            logger.exception("Planning failed")
+            self.root.after(0, lambda: self._sort_error(e))
+
+    def _show_preview(self, sorter_obj, plan):
+        if not plan:
+            messagebox.showinfo("Nothing to sort", "No PDF files were found in the selected folders.")
+            self._reset_after_sort()
+            return
+        dialog = SortPreviewDialog(self.root, plan)
+        if not dialog.confirmed:
+            self.status_label.config(text="Cancelled")
+            self._reset_after_sort()
+            return
+        copy = dialog.copy_mode
+        self.status_label.config(text="Copying..." if copy else "Moving...")
+        threading.Thread(
+            target=self._execute_plan, args=(sorter_obj, plan, copy), daemon=True
+        ).start()
+
+    def _execute_plan(self, sorter_obj, plan, copy):
+        try:
+            manifest, count = sorter_obj.execute(plan, copy=copy)
+            utils.save_manifest(manifest)
+            self.last_manifest = manifest
+            self.last_output_dir = sorter_obj.template_dir
+            unmatched = sum(1 for p in plan if p.status == "unmatched")
+            problems = sum(1 for p in plan if p.status in ("error", "unreadable"))
+            verb = "Copied" if copy else "Moved"
+            summary = (f"{verb} {count} file(s)."
+                       f"\nUnmatched: {unmatched}    Unreadable/errors: {problems}")
+            self.root.after(0, lambda: self._after_execute(summary))
+        except Exception as e:
+            logger.exception("Execute failed")
+            self.root.after(0, lambda: self._sort_error(e))
+
+    def _after_execute(self, summary):
+        self._reset_after_sort()
+        self._refresh_undo_state()
+        if self.last_output_dir and messagebox.askyesno(
+                "Sort complete", summary + "\n\nOpen the destination folder?"):
+            self._open_output()
+
+    def _sort_error(self, error):
+        utils.show_error(f"An error occurred:\n{error}")
+        self._reset_after_sort()
+
+    def _reset_after_sort(self):
+        self.sort_btn.config(state="normal")
+        self.status_label.config(text="Ready")
+        self.progress_bar['value'] = 0
+
+    def _refresh_undo_state(self):
+        self.undo_btn.config(state="normal" if self.last_manifest else "disabled")
+
+    def _open_output(self):
+        path = self.last_output_dir
+        if not path or not os.path.isdir(path):
+            return
+        try:
+            if hasattr(os, "startfile"):
+                os.startfile(path)  # Windows
+            else:
+                import subprocess
+                import sys
+                opener = "open" if sys.platform == "darwin" else "xdg-open"
+                subprocess.Popen([opener, path])
+        except Exception:
+            logger.exception("Could not open output folder")
+
+    def _undo_last_sort(self):
+        if not self.last_manifest:
+            return
+        if not messagebox.askyesno(
+                "Undo last sort",
+                f"Put {len(self.last_manifest)} file(s) back to their original locations?"):
+            return
+        self.undo_btn.config(state="disabled")
+        self.status_label.config(text="Undoing...")
+        threading.Thread(target=self._do_undo, args=(self.last_manifest,), daemon=True).start()
+
+    def _do_undo(self, manifest):
+        undone, errors = sorter.Sorter.undo(manifest)
+        utils.clear_manifest()
+        self.last_manifest = []
+
+        def done():
+            self.status_label.config(text="Ready")
+            self._refresh_undo_state()
+            messagebox.showinfo("Undo complete", f"Restored {undone} file(s). Problems: {errors}.")
+        self.root.after(0, done)
+
+
+class SortPreviewDialog(tk.Toplevel):
+    """Shows each PDF's planned outcome; the user picks Move, Copy, or Cancel."""
+
+    STATUS_LABEL = {
+        "matched": "will sort",
+        "unmatched": "no match",
+        "unreadable": "unreadable",
+        "error": "error",
+    }
+
+    def __init__(self, master, plan):
+        super().__init__(master)
+        self.title("Preview sort")
+        self.geometry("640x430")
+        self.transient(master)
+        self.confirmed = False
+        self.copy_mode = False
+
+        matched = [p for p in plan if p.status == "matched"]
+        unmatched = [p for p in plan if p.status == "unmatched"]
+        problems = [p for p in plan if p.status in ("unreadable", "error")]
+
+        ttk.Label(
+            self,
+            text=(f"{len(matched)} to sort    ·    {len(unmatched)} no match    ·    "
+                  f"{len(problems)} unreadable/error"),
+            font=("Segoe UI", 10, "bold"),
+        ).pack(anchor="w", padx=10, pady=(10, 5))
+
+        frame = ttk.Frame(self)
+        frame.pack(fill="both", expand=True, padx=10)
+        tree = ttk.Treeview(frame, columns=("outcome", "dest"), show="tree headings")
+        tree.heading("#0", text="File")
+        tree.heading("outcome", text="Outcome")
+        tree.heading("dest", text="Destination")
+        tree.column("#0", width=240)
+        tree.column("outcome", width=100, anchor="w")
+        tree.column("dest", width=260, anchor="w")
+        vsb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        tree.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+
+        tree.tag_configure("matched", foreground="#1a7f37")
+        tree.tag_configure("unmatched", foreground="#57606a")
+        tree.tag_configure("unreadable", foreground="#9a6700")
+        tree.tag_configure("error", foreground="#cf222e")
+
+        for p in matched + unmatched + problems:
+            dest = f"{p.dest}/{p.dest_name}" if p.status == "matched" else p.message
+            tree.insert("", "end", text=p.filename,
+                        values=(self.STATUS_LABEL.get(p.status, p.status), dest),
+                        tags=(p.status,))
+
+        btns = ttk.Frame(self)
+        btns.pack(fill="x", padx=10, pady=10)
+        cancel_btn = ttk.Button(btns, text="Cancel", command=self._cancel)
+        cancel_btn.pack(side="right")
+        copy_btn = ttk.Button(btns, text="Copy", command=self._copy,
+                              state=("normal" if matched else "disabled"))
+        copy_btn.pack(side="right", padx=(0, 5))
+        move_btn = ttk.Button(btns, text="Move", command=self._move,
+                              state=("normal" if matched else "disabled"))
+        move_btn.pack(side="right", padx=(0, 5))
+
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.grab_set()
+        (move_btn if matched else cancel_btn).focus_set()
+        self.wait_window()
+
+    def _move(self):
+        self.copy_mode = False
+        self.confirmed = True
+        self.destroy()
+
+    def _copy(self):
+        self.copy_mode = True
+        self.confirmed = True
+        self.destroy()
+
+    def _cancel(self):
+        self.confirmed = False
+        self.destroy()
+
 
 def main():
     utils.setup_logging()
