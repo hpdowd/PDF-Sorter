@@ -5,19 +5,21 @@ name: Build and Release
 # Versioning model (which branch builds what):
 #   * Push to main  -> always builds the program zip + installer. Publishes a
 #                      GitHub Release ONLY when the version in src/__init__.py
-#                      has not been released yet (tag v<version> doesn't exist).
-#                      So bumping __version__ and merging to main cuts a release;
-#                      ordinary commits to main just produce build artifacts.
-#   * Push a v* tag -> builds and publishes a release for that tag (kept as a
-#                      fallback; note Gitea mirror tag-pushes may not trigger it,
-#                      which is why main-push is the primary path).
+#                      has not been released yet (release v<version> doesn't
+#                      exist). So bumping __version__ and merging to main cuts a
+#                      release; ordinary commits to main just build artifacts.
 #   * Manual run    -> builds artifacts only, never releases (for test builds).
+#
+# IMPORTANT — tag anchoring: when cutting a release, also create the vX.Y.Z tag
+# and push it to Gitea together with main (`git push origin main vX.Y.Z`). The
+# Gitea->GitHub push mirror PRUNES any tag not present in Gitea, so a tag created
+# only by this workflow gets deleted on the next mirror sync (which drafts the
+# release). Pushing the tag from Gitea keeps it stable. We therefore do NOT
+# trigger on tag pushes (main-push is the single reliable trigger).
 on:
   push:
     branches:
       - main
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       version:
@@ -104,4 +106,5 @@ jobs:
             "dist/OCR_File_Sorter_Download_Installer.exe" \
             --target "${{ github.sha }}" \
             --title "OCR File Sorter $tag" \
+            --latest \
             --generate-notes
