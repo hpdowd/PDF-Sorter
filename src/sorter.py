@@ -1,12 +1,28 @@
 import os
 import shutil
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 import fitz  # PyMuPDF
 
 from src import utils
 
 logger = logging.getLogger("ocr_file_sorter.sorter")
+
+
+@dataclass
+class PlanItem:
+    """One PDF's planned outcome from a (non-destructive) sort plan."""
+    src: str                 # absolute source path
+    status: str              # "matched" | "unmatched" | "unreadable" | "error"
+    phrase: str = None       # matched phrase (when matched)
+    dest: str = None         # destination folder, relative to the template dir (when matched)
+    dest_name: str = None    # proposed filename after any renaming (when matched)
+    message: str = ""        # human-readable note (e.g. error text)
+
+    @property
+    def filename(self):
+        return os.path.basename(self.src)
 
 # Attempt to import OCR libraries. If they fail, OCR will be disabled.
 try:
@@ -225,63 +241,112 @@ class Sorter:
                 return candidate
             i += 1
 
-    def sort_files(self, folders_to_sort, deep_audit=False, first_page_only=False):
-        total_files_sorted = 0
-        total_files_scanned = 0
+    def plan(self, folders_to_sort, deep_audit=False, first_page_only=False):
+        """Read every PDF and decide its outcome **without moving anything**.
 
+        Returns a list of PlanItem. This is the non-destructive preview/dry-run
+        the GUI shows before the user confirms.
+        """
+        items = []
         for folder in folders_to_sort:
             if not os.path.isdir(folder):
                 continue
-
             if self.status_callback:
                 scope = "recursively" if deep_audit else "top-level"
-                self.status_callback(f"Sorting folder ({scope}): {folder}")
+                self.status_callback(f"Scanning folder ({scope}): {folder}")
 
-            # Materialize the list before moving so files relocated during the
-            # sort don't disturb the os.walk in deep-audit mode.
+            # Materialize before iterating so nothing shifts under us.
             for file_path in list(self._iter_pdfs(folder, deep_audit)):
-                filename = os.path.basename(file_path)
-                total_files_scanned += 1
                 if self.progress_callback:
                     self.progress_callback()
                 if self.status_callback:
                     self.status_callback(f"Scanning: {file_path}")
-
-                text = self.read_pdf_text(file_path, first_page_only=first_page_only)
-                if not text:
-                    continue
-
                 try:
+                    text = self.read_pdf_text(file_path, first_page_only=first_page_only)
+                    if not text:
+                        logger.info("Unreadable: %s", os.path.basename(file_path))
+                        items.append(PlanItem(file_path, "unreadable", message="No readable text"))
+                        continue
                     match = self.find_matching_rule(text)
-
                     if match:
-                        phrase, rule, destination_folder = match
-                        destination_path = os.path.join(self.template_dir, destination_folder)
-                        os.makedirs(destination_path, exist_ok=True)
-                        new_name = self._apply_naming(rule, phrase, file_path)
-                        target = self._unique_path(destination_path, new_name)
-                        shutil.move(file_path, target)
-                        total_files_sorted += 1
-                        moved_as = os.path.basename(target)
-                        logger.info("Moved %s -> %s/%s", filename, destination_folder, moved_as)
-                        if self.status_callback:
-                            self.status_callback(f"Moved: {filename} -> {destination_folder}/{moved_as}")
+                        phrase, rule, dest = match
+                        items.append(PlanItem(
+                            file_path, "matched", phrase=phrase, dest=dest,
+                            dest_name=self._apply_naming(rule, phrase, file_path)))
                     else:
-                        logger.info("No match: %s", filename)
-                        if self.status_callback:
-                            self.status_callback(f"No match found for: {filename}")
-                            # Print the NORMALIZED text for easier debugging
-                            debug_text = ' '.join(text.split()).lower()
-                            if len(debug_text) > 1000:
-                                debug_text = debug_text[:1000] + "..."
-                            self.status_callback(f"--- Normalized Text Read from {filename} ---\n{debug_text}\n---------------------------------")
+                        logger.info("No match: %s", os.path.basename(file_path))
+                        items.append(PlanItem(file_path, "unmatched", message="No matching rule"))
                 except Exception as e:
-                    logger.exception("Error processing %s", filename)
-                    if self.status_callback:
-                        self.status_callback(f"Error processing {filename}: {e}")
+                    logger.exception("Error planning %s", os.path.basename(file_path))
+                    items.append(PlanItem(file_path, "error", message=str(e)))
+        return items
 
-        logger.info("Sort complete: scanned=%d moved=%d", total_files_scanned, total_files_sorted)
+    def execute(self, plan_items, copy=False):
+        """Carry out a plan: copy or move each matched item into its destination.
+
+        Returns (manifest, count). The manifest is a list of
+        {"src", "dest", "copied"} entries describing what happened, suitable for
+        undo. Collisions are resolved with a numbered suffix.
+        """
+        manifest = []
+        for item in plan_items:
+            if item.status != "matched":
+                continue
+            dest_dir = os.path.join(self.template_dir, item.dest)
+            try:
+                os.makedirs(dest_dir, exist_ok=True)
+                target = self._unique_path(dest_dir, item.dest_name)
+                if copy:
+                    shutil.copy2(item.src, target)
+                else:
+                    shutil.move(item.src, target)
+                manifest.append({"src": item.src, "dest": target, "copied": copy})
+                logger.info("%s %s -> %s", "Copied" if copy else "Moved",
+                            item.filename, target)
+                if self.status_callback:
+                    verb = "Copied" if copy else "Moved"
+                    self.status_callback(f"{verb}: {item.filename} -> {item.dest}/{os.path.basename(target)}")
+            except Exception as e:
+                logger.exception("Failed to place %s", item.filename)
+                if self.status_callback:
+                    self.status_callback(f"Error placing {item.filename}: {e}")
+        logger.info("Execute complete: %s=%d", "copied" if copy else "moved", len(manifest))
+        return manifest, len(manifest)
+
+    @staticmethod
+    def undo(manifest):
+        """Reverse a manifest: move files back (or delete copies). Returns (undone, errors)."""
+        undone = 0
+        errors = 0
+        for entry in reversed(manifest):
+            src, dest, copied = entry["src"], entry["dest"], entry.get("copied", False)
+            try:
+                if not os.path.exists(dest):
+                    continue
+                if copied:
+                    os.remove(dest)
+                else:
+                    os.makedirs(os.path.dirname(src), exist_ok=True)
+                    # Restore to the original path; if something now occupies it,
+                    # fall back to a numbered name rather than clobbering.
+                    restore = src if not os.path.exists(src) else \
+                        Sorter._unique_path(os.path.dirname(src), os.path.basename(src))
+                    shutil.move(dest, restore)
+                undone += 1
+            except Exception:
+                logger.exception("Undo failed for %s", dest)
+                errors += 1
+        logger.info("Undo complete: undone=%d errors=%d", undone, errors)
+        return undone, errors
+
+    def sort_files(self, folders_to_sort, deep_audit=False, first_page_only=False):
+        """Plan then move, in one call (kept for callers that don't preview).
+
+        Returns (scanned, moved)."""
+        plan_items = self.plan(folders_to_sort, deep_audit, first_page_only)
+        _manifest, moved = self.execute(plan_items, copy=False)
+        scanned = len(plan_items)
+        logger.info("Sort complete: scanned=%d moved=%d", scanned, moved)
         if self.status_callback:
-            self.status_callback(f"Sort complete. Scanned: {total_files_scanned}, Moved: {total_files_sorted}")
-
-        return total_files_scanned, total_files_sorted
+            self.status_callback(f"Sort complete. Scanned: {scanned}, Moved: {moved}")
+        return scanned, moved
