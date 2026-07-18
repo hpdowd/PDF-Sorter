@@ -33,7 +33,7 @@ except ImportError:
     OCR_AVAILABLE = False
 
 class Sorter:
-    def __init__(self, mapping_path, progress_callback=None, status_callback=None):
+    def __init__(self, mapping_path, output_dir=None, progress_callback=None, status_callback=None):
         self.mapping_path = mapping_path
         self.progress_callback = progress_callback
         self.status_callback = status_callback
@@ -41,8 +41,14 @@ class Sorter:
         # Optional filename scheme, defined in the mapping under "_config".
         self.naming_scheme = (self.mapping_data.get("_config") or {}).get("naming_scheme") or None
         self._validate_mapping()
-        # The template directory is named after the mapping file (without .json) + "_template"
-        self.template_dir = os.path.splitext(self.mapping_path)[0] + "_template"
+        # Destination root for sorted files. When the caller supplies an output
+        # directory (the GUI's "Output folder" picker), sort into it. Otherwise
+        # fall back to a "<mapping>_template" folder beside the mapping file
+        # (legacy behaviour, kept for tests and headless callers).
+        if output_dir:
+            self.template_dir = os.path.abspath(output_dir)
+        else:
+            self.template_dir = os.path.splitext(self.mapping_path)[0] + "_template"
         if not os.path.exists(self.template_dir):
             os.makedirs(self.template_dir)
 
@@ -135,10 +141,14 @@ class Sorter:
         for phrase, rule in self.mapping_data.items():
             if phrase in utils.RESERVED_MAPPING_KEYS:
                 continue
-            # Normalize the mapping phrase the same way.
-            normalized_phrase = ' '.join(phrase.split()).lower()
+            # A rule key may hold several alternative phrases separated by '|';
+            # the rule matches if ANY alternative appears in the text. A key with
+            # no '|' is a single phrase, so this stays backward-compatible. Each
+            # alternative is normalized the same way as the text.
+            alternatives = [' '.join(p.split()).lower() for p in phrase.split('|') if p.strip()]
+            matched = next((alt for alt in alternatives if alt in normalized_text), None)
 
-            if normalized_phrase in normalized_text:
+            if matched:
                 # New-format rules are dicts ({"name", "dest"}); migrated
                 # old-format rules are plain strings. Support both.
                 destination = rule.get("dest") if isinstance(rule, dict) else rule
@@ -146,7 +156,7 @@ class Sorter:
                     logger.warning("Rule %r matched but has no destination; skipping", phrase)
                     continue
                 if self.status_callback:
-                    self.status_callback(f"Found a match for keyword: '{normalized_phrase}'")
+                    self.status_callback(f"Found a match for keyword: '{matched}'")
                 return phrase, rule, destination
         return None
 

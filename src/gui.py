@@ -1,4 +1,5 @@
 import os
+import csv
 import json
 import logging
 import tkinter as tk
@@ -12,7 +13,8 @@ logger = logging.getLogger("ocr_file_sorter.gui")
 from src.mapping_editor.editor_gui import MappingEditor
 from src.utils import (
     load_settings, save_settings,
-    LAST_MAPPING_KEY, MAPPINGS_DIR
+    LAST_MAPPING_KEY, OUTPUT_DIR_KEY, MAPPINGS_DIR,
+    DEEP_AUDIT_KEY, FIRST_PAGE_KEY,
 )
 
 class FileSorterGUI:
@@ -23,9 +25,10 @@ class FileSorterGUI:
         
         self.mapping_path = None
         self.settings = load_settings()
-        self.deep_audit = tk.BooleanVar()
-        self.first_page_only = tk.BooleanVar(value=True) # Default to True for speed
-        self.root.minsize(300, 220)
+        self.output_dir = self.settings.get(OUTPUT_DIR_KEY)
+        self.deep_audit = tk.BooleanVar(value=self.settings.get(DEEP_AUDIT_KEY, False))
+        self.first_page_only = tk.BooleanVar(value=self.settings.get(FIRST_PAGE_KEY, True))
+        self.root.minsize(360, 300)
 
         self._progress_done = 0
         self.last_manifest = utils.load_manifest()  # enables Undo across restarts
@@ -38,36 +41,68 @@ class FileSorterGUI:
     def _show_help(self):
         message = (
             "OCR File Sorter Help\n\n"
-            "This tool sorts PDF files into folders based on their content using OCR technology.\n\n"
+            "This tool sorts PDF files into folders based on their content, using each PDF's "
+            "text (with an OCR fallback for scans).\n\n"
+            "Mapping File:\n"
+            "- Choose the ruleset that decides where each PDF goes.\n"
+            "- Use 'Edit / Create...' to open the Mapping Editor.\n\n"
+            "Output Folder:\n"
+            "- Sorted files are filed here, inside per-category subfolders.\n"
+            "- You must choose an output folder before sorting.\n\n"
             "Folders to Sort:\n"
             "- Add one or more folders containing PDF files to be sorted.\n"
-            "- You can drag and drop folders from Explorer into the list below to add them quickly.\n\n"
-            "Deep Audit:\n"
-            "When enabled, the tool will recursively scan all subdirectories for PDF files to sort.\n\n"
-            "First Page Only:\n"
-            "When enabled, only scans the first page of each PDF for faster processing.\n\n"
-            "Use the Mapping Editor to create or modify sorting rules based on PDF content.\n\n"
+            "- You can drag and drop folders from Explorer into the list to add them quickly.\n\n"
+            "Preferences (File menu):\n"
+            "- Deep Audit: also scan PDFs inside subfolders (recursive).\n"
+            "- Scan first page only: faster; reads just the first page of each PDF.\n\n"
+            "Mapping rules:\n"
+            "- A rule matches when its phrase appears in a PDF's text.\n"
+            "- Separate alternatives with | (e.g. invoice|receipt) to match any of them.\n"
+            "- Rules are checked top to bottom; the first match wins.\n\n"
+            f"Mappings are stored in:\n{utils.MAPPINGS_DIR}\n\n"
             f"Logs are written to:\n{utils.LOG_FILE}\n"
         )
         messagebox.showinfo("Help - OCR File Sorter", message)
 
-    def _build_widgets(self):
-        # --- Mapping Selection ---
-        mapping_frame = ttk.LabelFrame(self.root, text="Mapping File")
-        mapping_frame.pack(fill="x", padx=10, pady=5)
+    def _show_about(self):
+        messagebox.showinfo(
+            "About OCR File Sorter",
+            f"OCR File Sorter\nVersion {__version__}\n\n"
+            "Sorts PDFs into folders based on their text content, "
+            "with an OCR fallback for scanned documents.",
+        )
 
-        self.mapping_combo = ttk.Combobox(mapping_frame, state="readonly")
-        self.mapping_combo.pack(side="left", fill="x", expand=True, padx=5, pady=5)
+    def _build_widgets(self):
+        PAD = 8
+        self._setup_styles()
+        self._build_menubar()
+
+        # --- Mapping + Output (aligned rows, no heavy group borders) ---
+        top = ttk.Frame(self.root)
+        top.pack(fill="x", padx=PAD, pady=(PAD, 0))
+        top.columnconfigure(1, weight=1)
+
+        ttk.Label(top, text="Mapping").grid(row=0, column=0, sticky="w", padx=(0, PAD), pady=4)
+        self.mapping_combo = ttk.Combobox(top, state="readonly")
+        self.mapping_combo.grid(row=0, column=1, sticky="ew", pady=4)
         self.mapping_combo.bind("<<ComboboxSelected>>", self._on_mapping_selected)
         utils.ToolTip(self.mapping_combo, "Select a mapping file to use for sorting PDFs.")
-
-        edit_btn = ttk.Button(mapping_frame, text="Edit/Create Mapping", command=self._open_mapping_editor)
-        edit_btn.pack(side="left", padx=5)
+        edit_btn = ttk.Button(top, text="Edit / Create...", command=self._open_mapping_editor)
+        edit_btn.grid(row=0, column=2, sticky="e", padx=(PAD, 0), pady=4)
         utils.ToolTip(edit_btn, "Open the mapping editor to create or modify mapping files.")
 
-        # --- Folder List ---
-        folder_frame = ttk.LabelFrame(self.root, text="Folders to Sort (Drag folders here or use Add Folder...)")
-        folder_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        ttk.Label(top, text="Output").grid(row=1, column=0, sticky="w", padx=(0, PAD), pady=4)
+        self.output_var = tk.StringVar(value=self.output_dir or "")
+        output_entry = ttk.Entry(top, textvariable=self.output_var, state="readonly")
+        output_entry.grid(row=1, column=1, sticky="ew", pady=4)
+        utils.ToolTip(output_entry, "Sorted files (and their category subfolders) are placed under this folder.")
+        choose_output_btn = ttk.Button(top, text="Choose...", command=self._choose_output_dir)
+        choose_output_btn.grid(row=1, column=2, sticky="e", padx=(PAD, 0), pady=4)
+        utils.ToolTip(choose_output_btn, "Pick the folder where sorted files will be placed.")
+
+        # --- Folders to sort (the main workspace) ---
+        folder_frame = ttk.LabelFrame(self.root, text="Folders to sort  (drag folders here, or use Add)")
+        folder_frame.pack(fill="both", expand=True, padx=PAD, pady=PAD)
 
         listbox_frame = ttk.Frame(folder_frame)
         listbox_frame.pack(side="left", fill="both", expand=True, padx=(5, 0), pady=5)
@@ -97,52 +132,50 @@ class FileSorterGUI:
         remove_folder_btn.pack(fill="x")
         utils.ToolTip(remove_folder_btn, "Remove selected folders from the list.")
 
-        self.root.rowconfigure(2, weight=1)
-        self.root.columnconfigure(0, weight=1)
-        folder_frame.rowconfigure(0, weight=1)
-        folder_frame.columnconfigure(0, weight=1)
-
-        # --- Options ---
-        options_frame = ttk.Frame(self.root)
-        options_frame.pack(fill="x", padx=10, pady=5)
-
-        deep_audit_check = ttk.Checkbutton(
-            options_frame, text="Deep Audit", variable=self.deep_audit
-        )
-        deep_audit_check.pack(side="left", padx=5)
-        utils.ToolTip(deep_audit_check, "If checked, also scan PDFs inside subfolders (recursive).")
-
-        first_page_check = ttk.Checkbutton(
-            options_frame, text="Scan first page only (faster)", variable=self.first_page_only
-        )
-        first_page_check.pack(side="left", padx=5)
-        utils.ToolTip(first_page_check, "Speeds up sorting by only reading the first page of each PDF.")
-
-        # --- Bottom Buttons ---
+        # --- Bottom buttons ---
         button_row = ttk.Frame(self.root)
-        button_row.pack(fill="x", padx=10, pady=5)
+        button_row.pack(fill="x", padx=PAD, pady=(0, PAD))
 
-        self.sort_btn = ttk.Button(button_row, text="Sort Files", command=self._start_sort_thread)
+        self.sort_btn = ttk.Button(button_row, text="Sort Files", style="Primary.TButton",
+                                   command=self._start_sort_thread)
         self.sort_btn.pack(side="left")
         utils.ToolTip(self.sort_btn, "Preview the sort, then choose Move or Copy.")
 
         self.undo_btn = ttk.Button(button_row, text="Undo Last Sort", command=self._undo_last_sort, state="disabled")
-        self.undo_btn.pack(side="left", padx=(5, 0))
+        self.undo_btn.pack(side="left", padx=(PAD, 0))
         utils.ToolTip(self.undo_btn, "Put the files from the last sort back where they were.")
-
-        help_btn = ttk.Button(button_row, text="Help", command=self._show_help)
-        help_btn.pack(side="right")
-        utils.ToolTip(help_btn, "Show help and usage instructions.")
 
         # --- Status Bar ---
         status_frame = ttk.Frame(self.root)
-        status_frame.pack(side="bottom", fill="x", padx=10, pady=5)
+        status_frame.pack(side="bottom", fill="x", padx=PAD, pady=(0, PAD))
         self.status_label = ttk.Label(status_frame, text="Ready")
         self.status_label.pack(side="left")
         self.progress_bar = ttk.Progressbar(status_frame, orient="horizontal", mode="determinate")
-        self.progress_bar.pack(side="right", fill="x", expand=True, padx=(10, 0))
+        self.progress_bar.pack(side="right", fill="x", expand=True, padx=(PAD, 0))
 
         self.folder_listbox.bind("<Configure>", lambda e: self._update_watermark())
+
+    def _setup_styles(self):
+        # Emphasize the primary action by weight/size. Native (vista) themed buttons
+        # don't reliably honor a background color, so we lean on font + padding.
+        style = ttk.Style()
+        style.configure("Primary.TButton", font=("Segoe UI", 10, "bold"), padding=(14, 8))
+
+    def _build_menubar(self):
+        menubar = tk.Menu(self.root)
+
+        file_menu = tk.Menu(menubar, tearoff=0)
+        file_menu.add_command(label="Preferences...", command=self._open_preferences)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.root.destroy)
+        menubar.add_cascade(label="File", menu=file_menu)
+
+        help_menu = tk.Menu(menubar, tearoff=0)
+        help_menu.add_command(label="Help", command=self._show_help)
+        help_menu.add_command(label="About", command=self._show_about)
+        menubar.add_cascade(label="Help", menu=help_menu)
+
+        self.root.config(menu=menubar)
 
     def _update_watermark(self):
         if self.folder_listbox.size() == 0:
@@ -170,6 +203,28 @@ class FileSorterGUI:
             self.mapping_path = os.path.join(MAPPINGS_DIR, selected)
             self.settings[LAST_MAPPING_KEY] = selected
             save_settings(self.settings)
+
+    def _choose_output_dir(self):
+        initial = self.output_dir if self.output_dir and os.path.isdir(self.output_dir) else ""
+        folder = filedialog.askdirectory(
+            mustexist=True, title="Select Output Folder", initialdir=initial)
+        if folder:
+            self.output_dir = folder
+            self.output_var.set(folder)
+            self.settings[OUTPUT_DIR_KEY] = folder
+            save_settings(self.settings)
+
+    def _open_preferences(self):
+        dialog = PreferencesDialog(self.root, self.first_page_only.get(), self.deep_audit.get())
+        if dialog.result is None:
+            return
+        first_page, deep = dialog.result
+        self.first_page_only.set(first_page)
+        self.deep_audit.set(deep)
+        self.settings[FIRST_PAGE_KEY] = first_page
+        self.settings[DEEP_AUDIT_KEY] = deep
+        save_settings(self.settings)
+
     def _add_folder(self):
         folder = filedialog.askdirectory(mustexist=True, title="Select Folder to Sort")
         if folder and folder not in self.folder_listbox.get(0, tk.END):
@@ -219,6 +274,10 @@ class FileSorterGUI:
         if not folders:
             utils.show_error("Please add at least one folder to sort.")
             return
+        output_dir = self.output_dir
+        if not output_dir or not os.path.isdir(output_dir):
+            utils.show_error("Please choose an output folder for the sorted files.")
+            return
         deep_audit = self.deep_audit.get()
         first_page_only = self.first_page_only.get()
 
@@ -228,14 +287,15 @@ class FileSorterGUI:
         self.progress_bar['value'] = 0
         threading.Thread(
             target=self._plan_and_preview,
-            args=(mapping_path, folders, deep_audit, first_page_only),
+            args=(mapping_path, output_dir, folders, deep_audit, first_page_only),
             daemon=True,
         ).start()
 
-    def _plan_and_preview(self, mapping_path, folders, deep_audit, first_page_only):
+    def _plan_and_preview(self, mapping_path, output_dir, folders, deep_audit, first_page_only):
         try:
             sorter_obj = sorter.Sorter(
                 mapping_path,
+                output_dir=output_dir,
                 status_callback=self.update_status,
                 progress_callback=self._on_progress,
             )
@@ -337,6 +397,53 @@ class FileSorterGUI:
         self.root.after(0, done)
 
 
+class PreferencesDialog(tk.Toplevel):
+    """Remembered scan defaults: first-page-only and deep audit.
+
+    result is None on cancel, or a (first_page_only, deep_audit) tuple on OK.
+    """
+
+    def __init__(self, master, first_page_only, deep_audit):
+        super().__init__(master)
+        self.title("Preferences")
+        self.transient(master)
+        self.resizable(False, False)
+        self.result = None
+
+        self.first_page_var = tk.BooleanVar(value=first_page_only)
+        self.deep_audit_var = tk.BooleanVar(value=deep_audit)
+
+        frame = ttk.Frame(self)
+        frame.pack(fill="both", expand=True, padx=16, pady=16)
+
+        ttk.Label(frame, text="Scanning", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 6))
+        ttk.Checkbutton(
+            frame, text="Scan first page only (faster)", variable=self.first_page_var
+        ).pack(anchor="w")
+        ttk.Checkbutton(
+            frame, text="Deep audit — also scan PDFs inside subfolders", variable=self.deep_audit_var
+        ).pack(anchor="w", pady=(4, 0))
+
+        btns = ttk.Frame(frame)
+        btns.pack(fill="x", pady=(16, 0))
+        ttk.Button(btns, text="OK", command=self._ok).pack(side="right")
+        ttk.Button(btns, text="Cancel", command=self._cancel).pack(side="right", padx=(0, 6))
+
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.bind("<Return>", lambda e: self._ok())
+        self.bind("<Escape>", lambda e: self._cancel())
+        self.grab_set()
+        self.wait_window()
+
+    def _ok(self):
+        self.result = (self.first_page_var.get(), self.deep_audit_var.get())
+        self.destroy()
+
+    def _cancel(self):
+        self.result = None
+        self.destroy()
+
+
 class SortPreviewDialog(tk.Toplevel):
     """Shows each PDF's planned outcome; the user picks Move, Copy, or Cancel."""
 
@@ -385,7 +492,8 @@ class SortPreviewDialog(tk.Toplevel):
         tree.tag_configure("unreadable", foreground="#9a6700")
         tree.tag_configure("error", foreground="#cf222e")
 
-        for p in matched + unmatched + problems:
+        self._rows = matched + unmatched + problems
+        for p in self._rows:
             dest = f"{p.dest}/{p.dest_name}" if p.status == "matched" else p.message
             tree.insert("", "end", text=p.filename,
                         values=(self.STATUS_LABEL.get(p.status, p.status), dest),
@@ -393,6 +501,9 @@ class SortPreviewDialog(tk.Toplevel):
 
         btns = ttk.Frame(self)
         btns.pack(fill="x", padx=10, pady=10)
+        export_btn = ttk.Button(btns, text="Export...", command=self._export_csv)
+        export_btn.pack(side="left")
+        utils.ToolTip(export_btn, "Save this preview (each file and where it would go) to a CSV.")
         cancel_btn = ttk.Button(btns, text="Cancel", command=self._cancel)
         cancel_btn.pack(side="right")
         copy_btn = ttk.Button(btns, text="Copy", command=self._copy,
@@ -421,10 +532,28 @@ class SortPreviewDialog(tk.Toplevel):
         self.confirmed = False
         self.destroy()
 
+    def _export_csv(self):
+        path = filedialog.asksaveasfilename(
+            parent=self, title="Export preview to CSV",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["File", "Outcome", "Destination"])
+                for p in self._rows:
+                    dest = f"{p.dest}/{p.dest_name}" if p.status == "matched" else p.message
+                    writer.writerow([p.filename, self.STATUS_LABEL.get(p.status, p.status), dest])
+        except OSError as e:
+            messagebox.showerror("Export failed", str(e), parent=self)
+
 
 def main():
     utils.setup_logging()
     logger.info("OCR File Sorter v%s starting", __version__)
+    utils.ensure_mappings_seeded()
     root = TkinterDnD.Tk()
     app = FileSorterGUI(root)
     root.mainloop()
