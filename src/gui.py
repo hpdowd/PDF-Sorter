@@ -194,6 +194,12 @@ class FileSorterGUI:
         """Callback function to update the status label from the sorter."""
         self.root.after(0, lambda: self.status_label.config(text=message))
 
+    def _on_progress(self):
+        """Advance the progress bar by one PDF (called from the sort thread)."""
+        self._progress_done = getattr(self, "_progress_done", 0) + 1
+        done = self._progress_done
+        self.root.after(0, lambda: self.progress_bar.config(value=done))
+
     def _start_sort_thread(self):
         self.sort_btn.config(state="disabled")
         self.status_label.config(text="Starting sort...")
@@ -216,21 +222,24 @@ class FileSorterGUI:
         try:
             sorter_obj = sorter.Sorter(
                 mapping_path,
-                status_callback=self.update_status
+                status_callback=self.update_status,
+                progress_callback=self._on_progress,
             )
             deep_audit = self.deep_audit.get()
             first_page_only = self.first_page_only.get()
-            
-            self.root.after(0, lambda: self.progress_bar.config(maximum=len(folders)))
+
+            total_pdfs = sorter_obj.count_pdfs(folders, deep_audit=deep_audit)
+            self._progress_done = 0
+            self.root.after(0, lambda: self.progress_bar.config(maximum=max(total_pdfs, 1), value=0))
+
             total_scanned = 0
             total_moved = 0
-            for i, folder in enumerate(folders):
+            for folder in folders:
                 if os.path.isdir(folder):
                     self.root.after(0, lambda f=folder: self.status_label.config(text=f"Sorting {os.path.basename(f)}..."))
                     scanned, moved = sorter_obj.sort_files([folder], deep_audit=deep_audit, first_page_only=first_page_only)
                     total_scanned += scanned
                     total_moved += moved
-                self.root.after(0, lambda v=i+1: self.progress_bar.config(value=v))
 
             summary = f"Sorted {total_moved} of {total_scanned} PDF(s) scanned."
             self.root.after(0, lambda: messagebox.showinfo("Sort complete", summary))

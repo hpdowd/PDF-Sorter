@@ -44,6 +44,28 @@ class TestFindDestination(unittest.TestCase):
         }, "/tmp")
         self.assertEqual(s.find_destination("alpha and beta present"), "DestA")
 
+    def test_empty_dest_rule_does_not_block_later_match(self):
+        s = make_sorter({
+            "invoice": {"name": "Bad", "dest": ""},          # matches but misconfigured
+            "invoice number": {"name": "Good", "dest": "Invoices"},
+        }, "/tmp")
+        self.assertEqual(s.find_destination("invoice number 42"), "Invoices")
+
+    def test_only_empty_dest_match_returns_none(self):
+        s = make_sorter({"invoice": {"name": "Bad", "dest": ""}}, "/tmp")
+        self.assertIsNone(s.find_destination("this invoice"))
+
+
+class TestMappingValidation(unittest.TestCase):
+    def test_warns_on_rules_missing_dest(self):
+        s = make_sorter({
+            "good": {"name": "G", "dest": "D"},
+            "bad": {"name": "B", "dest": ""},
+        }, "/tmp")
+        with self.assertLogs("ocr_file_sorter.sorter", level="WARNING") as cm:
+            s._validate_mapping()
+        self.assertIn("bad", " ".join(cm.output))
+
 
 class TestUniquePath(unittest.TestCase):
     def setUp(self):
@@ -105,6 +127,17 @@ class TestSortFiles(unittest.TestCase):
         self.s.read_pdf_text = lambda p, first_page_only=False: "unrelated text"
         scanned, moved = self.s.sort_files([self.inp], deep_audit=False)
         self.assertEqual((scanned, moved), (2, 0))
+
+    def test_count_pdfs_respects_deep_audit(self):
+        self.assertEqual(self.s.count_pdfs([self.inp], deep_audit=False), 2)
+        self.assertEqual(self.s.count_pdfs([self.inp], deep_audit=True), 3)
+
+    def test_progress_callback_fires_once_per_scanned_file(self):
+        calls = []
+        self.s.progress_callback = lambda: calls.append(1)
+        scanned, _ = self.s.sort_files([self.inp], deep_audit=False)
+        self.assertEqual(len(calls), scanned)
+        self.assertEqual(len(calls), 2)
 
     def test_deep_audit_skips_own_template_dir(self):
         # Put the template dir *inside* the input folder with an already-sorted file.

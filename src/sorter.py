@@ -21,6 +21,7 @@ class Sorter:
         self.progress_callback = progress_callback
         self.status_callback = status_callback
         self.mapping_data = self.load_mapping()
+        self._validate_mapping()
         # The template directory is named after the mapping file (without .json) + "_template"
         self.template_dir = os.path.splitext(self.mapping_path)[0] + "_template"
         if not os.path.exists(self.template_dir):
@@ -121,11 +122,27 @@ class Sorter:
                 # New-format rules are dicts ({"name", "dest"}); migrated
                 # old-format rules are plain strings. Support both.
                 destination = rule.get("dest") if isinstance(rule, dict) else rule
+                if not destination:
+                    # Misconfigured rule (no destination): warn and keep looking
+                    # so it doesn't block an otherwise-valid later match.
+                    logger.warning("Rule %r matched but has no destination; skipping", phrase)
+                    continue
                 if self.status_callback:
                     # Add a debug message to show exactly what matched.
                     self.status_callback(f"Found a match for keyword: '{normalized_phrase}'")
                 return destination
         return None
+
+    def _validate_mapping(self):
+        """Log (and surface) a warning for any rule that has no usable destination."""
+        invalid = [phrase for phrase, rule in self.mapping_data.items()
+                   if not (rule.get("dest") if isinstance(rule, dict) else rule)]
+        if invalid:
+            logger.warning("%d mapping rule(s) have no destination and will be skipped: %s",
+                           len(invalid), ", ".join(repr(p) for p in invalid))
+            if self.status_callback:
+                self.status_callback(
+                    f"Warning: {len(invalid)} rule(s) have no destination and will be skipped.")
 
     def _iter_pdfs(self, folder, deep_audit):
         """Yield PDF paths in a folder. With deep_audit, recurse into subfolders,
@@ -147,6 +164,14 @@ class Sorter:
                 file_path = os.path.join(folder, filename)
                 if os.path.isfile(file_path) and filename.lower().endswith('.pdf'):
                     yield file_path
+
+    def count_pdfs(self, folders_to_sort, deep_audit=False):
+        """Count the PDFs sort_files would scan (respects deep_audit + template guard)."""
+        total = 0
+        for folder in folders_to_sort:
+            if os.path.isdir(folder):
+                total += sum(1 for _ in self._iter_pdfs(folder, deep_audit))
+        return total
 
     @staticmethod
     def _unique_path(directory, filename):
@@ -179,6 +204,8 @@ class Sorter:
             for file_path in list(self._iter_pdfs(folder, deep_audit)):
                 filename = os.path.basename(file_path)
                 total_files_scanned += 1
+                if self.progress_callback:
+                    self.progress_callback()
                 if self.status_callback:
                     self.status_callback(f"Scanning: {file_path}")
 
