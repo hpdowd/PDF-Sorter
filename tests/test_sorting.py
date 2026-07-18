@@ -17,6 +17,7 @@ def make_sorter(mapping_data, template_dir):
     s.mapping_path = "x.json"
     s.template_dir = template_dir
     s.mapping_data = mapping_data
+    s.naming_scheme = (mapping_data.get("_config") or {}).get("naming_scheme") or None
     return s
 
 
@@ -139,6 +140,14 @@ class TestSortFiles(unittest.TestCase):
         self.assertEqual(len(calls), scanned)
         self.assertEqual(len(calls), 2)
 
+    def test_sort_renames_when_scheme_configured(self):
+        s = make_sorter({"invoice": {"name": "Invoice", "dest": "Invoices"}}, self.tpl)
+        s.naming_scheme = "{rule_name}_{original_filename}{ext}"
+        s.read_pdf_text = lambda p, first_page_only=False: "invoice"
+        s.sort_files([self.inp], deep_audit=False)
+        self.assertTrue(os.path.exists(os.path.join(self.tpl, "Invoices", "Invoice_a.pdf")))
+        self.assertTrue(os.path.exists(os.path.join(self.tpl, "Invoices", "Invoice_b.pdf")))
+
     def test_deep_audit_skips_own_template_dir(self):
         # Put the template dir *inside* the input folder with an already-sorted file.
         inside_tpl = os.path.join(self.inp, "Invoices_template")
@@ -152,6 +161,51 @@ class TestSortFiles(unittest.TestCase):
         # a.pdf, b.pdf, sub/c.pdf are scanned; already.pdf in the template is skipped.
         self.assertEqual(scanned, 3)
         self.assertTrue(os.path.exists(already))
+
+
+class TestNaming(unittest.TestCase):
+    def _sorter(self, scheme):
+        s = make_sorter({"invoice": {"name": "Invoice", "dest": "Invoices"}}, "/tmp")
+        s.naming_scheme = scheme
+        return s
+
+    def test_no_scheme_keeps_original_name(self):
+        s = self._sorter(None)
+        self.assertEqual(s._apply_naming({"name": "X"}, "p", "/x/orig.pdf"), "orig.pdf")
+
+    def test_expands_placeholders(self):
+        s = self._sorter("{rule_name} - {original_filename}{ext}")
+        self.assertEqual(
+            s._apply_naming({"name": "Invoice"}, "invoice", "/x/orig.pdf"),
+            "Invoice - orig.pdf")
+
+    def test_sanitizes_invalid_chars(self):
+        s = self._sorter("{rule_name}{ext}")
+        self.assertEqual(s._apply_naming({"name": 'A/B:C'}, "p", "/x/o.pdf"), "ABC.pdf")
+
+    def test_appends_ext_if_scheme_omits_it(self):
+        s = self._sorter("{rule_name}")
+        self.assertEqual(s._apply_naming({"name": "Invoice"}, "p", "/x/o.pdf"), "Invoice.pdf")
+
+    def test_date_placeholder(self):
+        from datetime import datetime
+        s = self._sorter("{date}{ext}")
+        self.assertEqual(s._apply_naming({"name": "x"}, "p", "/x/o.pdf"),
+                         datetime.now().strftime("%Y%m%d") + ".pdf")
+
+    def test_config_key_is_not_matched_as_a_rule(self):
+        s = make_sorter({"_config": {"naming_scheme": "x"},
+                         "invoice": {"name": "I", "dest": "Invoices"}}, "/tmp")
+        self.assertIsNone(s.find_matching_rule("mentions _config only"))
+        match = s.find_matching_rule("here is an invoice")
+        self.assertEqual((match[0], match[2]), ("invoice", "Invoices"))
+
+    def test_config_key_not_flagged_by_validation(self):
+        s = make_sorter({"_config": {"naming_scheme": "x"},
+                         "invoice": {"name": "I", "dest": "Invoices"}}, "/tmp")
+        with self.assertRaises(AssertionError):
+            with self.assertLogs("ocr_file_sorter.sorter", level="WARNING"):
+                s._validate_mapping()  # no warnings expected -> assertLogs raises
 
 
 class TestMappingLoading(unittest.TestCase):

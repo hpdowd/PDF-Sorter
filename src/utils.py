@@ -9,6 +9,8 @@ from tkinter import messagebox
 # --- Constants ---
 LAST_MAPPING_KEY = "last_mapping_file"
 MAPPINGS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "mappings"))
+# Reserved top-level keys in a mapping file that are config, not phrase rules.
+RESERVED_MAPPING_KEYS = ("_config",)
 
 # --- Logging ---
 LOGGER_NAME = "ocr_file_sorter"

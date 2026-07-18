@@ -1,6 +1,7 @@
 import os
 import shutil
 import logging
+from datetime import datetime
 import fitz  # PyMuPDF
 
 from src import utils
@@ -21,6 +22,8 @@ class Sorter:
         self.progress_callback = progress_callback
         self.status_callback = status_callback
         self.mapping_data = self.load_mapping()
+        # Optional filename scheme, defined in the mapping under "_config".
+        self.naming_scheme = (self.mapping_data.get("_config") or {}).get("naming_scheme") or None
         self._validate_mapping()
         # The template directory is named after the mapping file (without .json) + "_template"
         self.template_dir = os.path.splitext(self.mapping_path)[0] + "_template"
@@ -105,38 +108,42 @@ class Sorter:
 
         return text
 
-    def find_destination(self, text):
+    def find_matching_rule(self, text):
+        """Return (phrase, rule, dest) for the first matching rule with a usable
+        destination, or None. Skips reserved config keys; a rule that matches but
+        has no destination is warned about and skipped (so it doesn't block a
+        later valid match). Search is case-insensitive + whitespace-normalized.
         """
-        Finds the destination folder by checking for keywords in the text.
-        The search is case-insensitive and normalized to handle OCR quirks.
-        """
-        # Normalize the text from the PDF: replace newlines/tabs with spaces,
-        # collapse multiple spaces, and convert to lowercase.
         normalized_text = ' '.join(text.split()).lower()
 
         for phrase, rule in self.mapping_data.items():
-            # Normalize the mapping phrase in the same way.
+            if phrase in utils.RESERVED_MAPPING_KEYS:
+                continue
+            # Normalize the mapping phrase the same way.
             normalized_phrase = ' '.join(phrase.split()).lower()
-            
+
             if normalized_phrase in normalized_text:
                 # New-format rules are dicts ({"name", "dest"}); migrated
                 # old-format rules are plain strings. Support both.
                 destination = rule.get("dest") if isinstance(rule, dict) else rule
                 if not destination:
-                    # Misconfigured rule (no destination): warn and keep looking
-                    # so it doesn't block an otherwise-valid later match.
                     logger.warning("Rule %r matched but has no destination; skipping", phrase)
                     continue
                 if self.status_callback:
-                    # Add a debug message to show exactly what matched.
                     self.status_callback(f"Found a match for keyword: '{normalized_phrase}'")
-                return destination
+                return phrase, rule, destination
         return None
+
+    def find_destination(self, text):
+        """Return the destination folder for the first matching rule, or None."""
+        match = self.find_matching_rule(text)
+        return match[2] if match else None
 
     def _validate_mapping(self):
         """Log (and surface) a warning for any rule that has no usable destination."""
         invalid = [phrase for phrase, rule in self.mapping_data.items()
-                   if not (rule.get("dest") if isinstance(rule, dict) else rule)]
+                   if phrase not in utils.RESERVED_MAPPING_KEYS
+                   and not (rule.get("dest") if isinstance(rule, dict) else rule)]
         if invalid:
             logger.warning("%d mapping rule(s) have no destination and will be skipped: %s",
                            len(invalid), ", ".join(repr(p) for p in invalid))
@@ -172,6 +179,37 @@ class Sorter:
             if os.path.isdir(folder):
                 total += sum(1 for _ in self._iter_pdfs(folder, deep_audit))
         return total
+
+    def _apply_naming(self, rule, phrase, original_path):
+        """Compute the destination filename. With a configured naming scheme,
+        expand its placeholders; otherwise keep the original name."""
+        original_stem, ext = os.path.splitext(os.path.basename(original_path))
+        if not self.naming_scheme:
+            return original_stem + ext
+
+        now = datetime.now()
+        rule_name = (rule.get("name") if isinstance(rule, dict) else "") or ""
+        values = {
+            "{rule_name}": rule_name,
+            "{phrase}": phrase,
+            "{original_filename}": original_stem,
+            "{date}": now.strftime("%Y%m%d"),
+            "{time}": now.strftime("%H-%M-%S"),
+            "{ext}": ext,
+        }
+        new_name = self.naming_scheme
+        for key, value in values.items():
+            new_name = new_name.replace(key, value)
+        # Strip characters that are invalid in filenames.
+        for ch in '<>:"/\\|?*':
+            new_name = new_name.replace(ch, "")
+        new_name = new_name.strip()
+        if not new_name:
+            return original_stem + ext
+        # Keep an extension even if the scheme omitted {ext}.
+        if not os.path.splitext(new_name)[1]:
+            new_name += ext
+        return new_name
 
     @staticmethod
     def _unique_path(directory, filename):
@@ -214,17 +252,20 @@ class Sorter:
                     continue
 
                 try:
-                    destination_folder = self.find_destination(text)
+                    match = self.find_matching_rule(text)
 
-                    if destination_folder:
+                    if match:
+                        phrase, rule, destination_folder = match
                         destination_path = os.path.join(self.template_dir, destination_folder)
                         os.makedirs(destination_path, exist_ok=True)
-                        target = self._unique_path(destination_path, filename)
+                        new_name = self._apply_naming(rule, phrase, file_path)
+                        target = self._unique_path(destination_path, new_name)
                         shutil.move(file_path, target)
                         total_files_sorted += 1
-                        logger.info("Moved %s -> %s", filename, destination_folder)
+                        moved_as = os.path.basename(target)
+                        logger.info("Moved %s -> %s/%s", filename, destination_folder, moved_as)
                         if self.status_callback:
-                            self.status_callback(f"Moved: {filename} -> {destination_folder}")
+                            self.status_callback(f"Moved: {filename} -> {destination_folder}/{moved_as}")
                     else:
                         logger.info("No match: %s", filename)
                         if self.status_callback:

@@ -4,6 +4,10 @@ on_remove_rule / on_move_rule previously unpacked a 3-column table row into two
 variables (phrase, _), raising ValueError and silently failing in the no-console
 release build. These tests guard that regression.
 """
+import os
+import json
+import shutil
+import tempfile
 import unittest
 
 from src.mapping_editor.editor_logic import EditorLogic
@@ -104,6 +108,44 @@ class TestEditorActionsRegression(unittest.TestCase):
         view.mapping_table._sel = (0,)  # invoice
         actions.on_move_rule("down")
         self.assertEqual(list(logic.mappings), ["receipt", "invoice", "report"])
+
+
+class TestEditorConfig(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.path = os.path.join(self.tmp, "m.json")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _write(self, data):
+        with open(self.path, "w") as f:
+            json.dump(data, f)
+
+    def test_config_separated_on_load_and_merged_on_save(self):
+        self._write({"_config": {"naming_scheme": "{rule_name}{ext}"},
+                     "invoice": {"name": "Inv", "dest": "Invoices"}})
+        logic = EditorLogic()
+        logic.load_mapping_file(self.path)
+        self.assertNotIn("_config", logic.mappings)          # not shown as a rule
+        self.assertEqual(logic.get_naming_scheme(), "{rule_name}{ext}")
+
+        logic.save_mappings()
+        with open(self.path) as f:
+            saved = json.load(f)
+        self.assertEqual(saved["_config"]["naming_scheme"], "{rule_name}{ext}")
+        self.assertIn("invoice", saved)
+
+    def test_set_naming_scheme_marks_dirty_then_clears(self):
+        self._write({"invoice": {"name": "Inv", "dest": "Invoices"}})
+        logic = EditorLogic()
+        logic.load_mapping_file(self.path)
+        self.assertFalse(logic.is_dirty)
+        logic.set_naming_scheme("{date}{ext}")
+        self.assertTrue(logic.is_dirty)
+        self.assertEqual(logic.get_naming_scheme(), "{date}{ext}")
+        logic.set_naming_scheme("")
+        self.assertEqual(logic.get_naming_scheme(), "")
 
 
 if __name__ == "__main__":

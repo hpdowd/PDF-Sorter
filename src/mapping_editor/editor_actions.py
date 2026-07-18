@@ -117,6 +117,7 @@ class EditorActions:
 
     def on_save(self):
         """Handle the 'Save' button click."""
+        self.logic.set_naming_scheme(self.view.scheme_var.get())
         success, message = self.logic.save_mappings()
         if success:
             self.view.set_dirty(False)
