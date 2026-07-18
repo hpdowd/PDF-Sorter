@@ -1,8 +1,11 @@
 import os
 import shutil
+import logging
 import fitz  # PyMuPDF
 
 from src import utils
+
+logger = logging.getLogger("ocr_file_sorter.sorter")
 
 # Attempt to import OCR libraries. If they fail, OCR will be disabled.
 try:
@@ -51,12 +54,14 @@ class Sorter:
                 else:
                     text = "".join(page.get_text() for page in doc).strip()
         except Exception as e:
+            logger.exception("Error reading %s", os.path.basename(file_path))
             if self.status_callback:
                 self.status_callback(f"Error reading {os.path.basename(file_path)}: {e}")
             return ""
 
         # 2. If no text was found, fall back to OCR if available
         if not text and OCR_AVAILABLE:
+            logger.info("OCR fallback for %s", os.path.basename(file_path))
             if self.status_callback:
                 self.status_callback(f"No text layer in {os.path.basename(file_path)}. Attempting OCR...")
             try:
@@ -84,10 +89,12 @@ class Sorter:
                         ocr_texts.append(page_text)
                 text = "\n".join(ocr_texts)
             except pytesseract.TesseractNotFoundError:
+                logger.warning("Tesseract not found; OCR unavailable")
                 if self.status_callback:
                     self.status_callback("Tesseract not found. OCR unavailable. Please install Tesseract.")
                 return "" # Return empty string if Tesseract is not found
             except Exception as e:
+                logger.exception("OCR error for %s", os.path.basename(file_path))
                 if self.status_callback:
                     self.status_callback(f"An error occurred during OCR: {e}")
                 return ""
@@ -188,9 +195,11 @@ class Sorter:
                         target = self._unique_path(destination_path, filename)
                         shutil.move(file_path, target)
                         total_files_sorted += 1
+                        logger.info("Moved %s -> %s", filename, destination_folder)
                         if self.status_callback:
                             self.status_callback(f"Moved: {filename} -> {destination_folder}")
                     else:
+                        logger.info("No match: %s", filename)
                         if self.status_callback:
                             self.status_callback(f"No match found for: {filename}")
                             # Print the NORMALIZED text for easier debugging
@@ -199,9 +208,11 @@ class Sorter:
                                 debug_text = debug_text[:1000] + "..."
                             self.status_callback(f"--- Normalized Text Read from {filename} ---\n{debug_text}\n---------------------------------")
                 except Exception as e:
+                    logger.exception("Error processing %s", filename)
                     if self.status_callback:
                         self.status_callback(f"Error processing {filename}: {e}")
 
+        logger.info("Sort complete: scanned=%d moved=%d", total_files_scanned, total_files_sorted)
         if self.status_callback:
             self.status_callback(f"Sort complete. Scanned: {total_files_scanned}, Moved: {total_files_sorted}")
 
