@@ -2,7 +2,7 @@ import os
 import tkinter as tk
 from tkinter import ttk
 
-from src import utils
+from src import utils, theme
 from src.utils import ToolTip
 from src.mapping_editor.dialogs import NewMappingDialog, PatternDestDialog
 from src.mapping_editor.mapping_table import MappingTable
@@ -20,6 +20,7 @@ class MappingEditor(tk.Toplevel):
     """
     def __init__(self, master, on_save_callback=None, mapping_path=None):
         super().__init__(master)
+        self.configure(background=theme.BG)
         self.title("Mapping Editor")
         self.geometry("1000x600")
         self.on_save_callback = on_save_callback

@@ -11,12 +11,13 @@ Author: Your Name
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from src import utils
+from src import utils, theme
 
 class BaseDialog(tk.Toplevel):
     """A base class for creating modal dialogs using standard tkinter."""
     def __init__(self, parent, title=None):
         super().__init__(parent)
+        self.configure(background=theme.BG)
         self.transient(parent)
         if title:
             self.title(title)

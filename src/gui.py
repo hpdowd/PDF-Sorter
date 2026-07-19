@@ -7,7 +7,7 @@ from tkinter import filedialog, messagebox, ttk
 from tkinterdnd2 import DND_FILES, TkinterDnD
 import threading
 
-from src import sorter, utils, __version__
+from src import sorter, utils, theme, __version__
 
 logger = logging.getLogger("ocr_file_sorter.gui")
 from src.mapping_editor.editor_gui import MappingEditor
@@ -174,10 +174,10 @@ class FileSorterGUI:
         self.folder_listbox.bind("<Configure>", lambda e: self._update_watermark())
 
     def _setup_styles(self):
-        # Emphasize the primary action by weight/size. Native (vista) themed buttons
-        # don't reliably honor a background color, so we lean on font + padding.
-        style = ttk.Style()
-        style.configure("Primary.TButton", font=("Segoe UI", 10, "bold"), padding=(14, 8))
+        # One shared theme for the whole app (clam-based, no extra deps). It defines
+        # Primary.TButton as a filled accent button — clam honors button backgrounds,
+        # unlike the native vista theme the app used before.
+        theme.apply_theme(self.root)
 
     def _build_menubar(self):
         menubar = tk.Menu(self.root)
@@ -460,6 +460,7 @@ class PreferencesDialog(tk.Toplevel):
 
     def __init__(self, master, first_page_only, deep_audit):
         super().__init__(master)
+        self.configure(background=theme.BG)
         self.title("Settings")
         self.transient(master)
         self.resizable(False, False)
@@ -518,6 +519,7 @@ class SortPreviewDialog(tk.Toplevel):
 
     def __init__(self, master, plan, sorter_obj):
         super().__init__(master)
+        self.configure(background=theme.BG)
         self.title("Preview sort")
         self.geometry("720x470")
         self.transient(master)
@@ -581,7 +583,7 @@ class SortPreviewDialog(tk.Toplevel):
         self.cancel_btn.pack(side="right")
         self.copy_btn = ttk.Button(btns, text="Copy", command=self._copy)
         self.copy_btn.pack(side="right", padx=(0, 5))
-        self.move_btn = ttk.Button(btns, text="Move", command=self._move)
+        self.move_btn = ttk.Button(btns, text="Move", command=self._move, style="Primary.TButton")
         self.move_btn.pack(side="right", padx=(0, 5))
 
         self._refresh_actions()
@@ -691,6 +693,7 @@ class DestinationChooser(tk.Toplevel):
 
     def __init__(self, master, filename, folders, current=None):
         super().__init__(master)
+        self.configure(background=theme.BG)
         self.title("Change destination")
         self.transient(master)
         self.resizable(False, False)
