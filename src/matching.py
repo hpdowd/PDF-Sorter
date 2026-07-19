@@ -32,14 +32,63 @@ def resolve_match_spec(phrase_key, rule):
     """Return the effective ``{"all": [...], "any": [...], "none": [...]}`` spec
     for a rule, with every term already normalized.
 
-    Today the spec is derived from the rule key's ``|`` alternatives as an
-    *any-of* condition, which reproduces the historic behavior exactly (a bare key
-    with no ``|`` is a single any-of term). This is the seam where an explicit
-    ``match`` block will later take precedence; until one is written, every rule
-    resolves to the key-derived any-of spec, so existing mappings are unchanged.
+    Precedence:
+
+    1. An explicit ``match`` block on the rule (``{"all"|"any"|"none": [...]}``)
+       is authoritative — the key is then just the rule's identity/name and does
+       not contribute terms.
+    2. Otherwise the spec is derived from the key's ``|`` alternatives as an
+       *any-of* condition, reproducing the historic behavior exactly (a bare key
+       with no ``|`` is a single any-of term).
+
+    So a rule only needs a ``match`` block when it uses advanced options; simple
+    rules keep just their key and existing mappings are unchanged (no on-disk
+    migration — back-compat is handled here at match time). A ``match`` block with
+    no positive term (``all``/``any`` both empty) is treated as unset and falls
+    back to the key, so a malformed block never leaves a rule silently dead.
     """
+    match = rule.get("match") if isinstance(rule, dict) else None
+    if match:
+        spec = {
+            "all": [normalize(t) for t in (match.get("all") or []) if str(t).strip()],
+            "any": [normalize(t) for t in (match.get("any") or []) if str(t).strip()],
+            "none": [normalize(t) for t in (match.get("none") or []) if str(t).strip()],
+        }
+        if spec["all"] or spec["any"]:
+            return spec
+
     alternatives = [normalize(part) for part in phrase_key.split("|") if part.strip()]
     return {"all": [], "any": alternatives, "none": []}
+
+
+def describe_match(phrase_key, rule):
+    """Return a one-line, plain-language summary of when a rule matches, for the
+    rules list — e.g. ``"invoice or receipt · and acme · not quote"``.
+
+    Uses the terms as the user typed them (not normalized), so the summary reads
+    back their own words. A simple key-only rule reads as short as today
+    (``"invoice or receipt"``); advanced options append ``and``/``not`` segments.
+    """
+    match = rule.get("match") if isinstance(rule, dict) else None
+    any_terms = all_terms = none_terms = []
+    if match:
+        any_terms = [str(t).strip() for t in (match.get("any") or []) if str(t).strip()]
+        all_terms = [str(t).strip() for t in (match.get("all") or []) if str(t).strip()]
+        none_terms = [str(t).strip() for t in (match.get("none") or []) if str(t).strip()]
+    if not (any_terms or all_terms):
+        # No usable match block: fall back to the key's alternatives (any-of).
+        any_terms = [part.strip() for part in phrase_key.split("|") if part.strip()]
+        all_terms = none_terms = []
+
+    segments = []
+    remaining_all = list(all_terms)
+    if any_terms:
+        segments.append(" or ".join(any_terms))
+    elif remaining_all:
+        segments.append(remaining_all.pop(0))
+    segments.extend(f"and {term}" for term in remaining_all)
+    segments.extend(f"not {term}" for term in none_terms)
+    return " · ".join(segments) if segments else "(no match terms)"
 
 
 def match_rule(normalized_text, spec):

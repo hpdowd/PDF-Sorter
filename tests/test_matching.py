@@ -30,6 +30,43 @@ class TestResolveMatchSpec(unittest.TestCase):
         spec = matching.resolve_match_spec("invoice||", {"dest": "X"})
         self.assertEqual(spec["any"], ["invoice"])
 
+    def test_explicit_match_block_takes_precedence_over_key(self):
+        rule = {"dest": "X", "match": {"all": ["Invoice"], "any": ["Acme", "Acme Corp"],
+                                       "none": ["Quote"]}}
+        spec = matching.resolve_match_spec("Acme invoices", rule)
+        self.assertEqual(spec, {"all": ["invoice"], "any": ["acme", "acme corp"],
+                                "none": ["quote"]})
+
+    def test_empty_match_block_falls_back_to_key(self):
+        # A block with no positive term must not leave the rule dead.
+        rule = {"dest": "X", "match": {"none": ["draft"]}}
+        spec = matching.resolve_match_spec("invoice", rule)
+        self.assertEqual(spec, {"all": [], "any": ["invoice"], "none": []})
+
+    def test_string_rule_uses_key(self):
+        # Old-format rules are bare strings (dest); matching comes from the key.
+        spec = matching.resolve_match_spec("receipt", "Receipts")
+        self.assertEqual(spec["any"], ["receipt"])
+
+
+class TestDescribeMatch(unittest.TestCase):
+    def test_simple_key(self):
+        self.assertEqual(matching.describe_match("invoice", {"dest": "X"}), "invoice")
+
+    def test_pipe_key_reads_as_or(self):
+        self.assertEqual(matching.describe_match("invoice|receipt", {"dest": "X"}),
+                         "invoice or receipt")
+
+    def test_full_advanced_rule(self):
+        rule = {"dest": "X", "match": {"any": ["invoice", "receipt"], "all": ["acme"],
+                                       "none": ["quote"]}}
+        self.assertEqual(matching.describe_match("Acme", rule),
+                         "invoice or receipt · and acme · not quote")
+
+    def test_all_only_omits_leading_and(self):
+        rule = {"dest": "X", "match": {"all": ["acme", "globex"]}}
+        self.assertEqual(matching.describe_match("Acme", rule), "acme · and globex")
+
 
 class TestMatchRule(unittest.TestCase):
     def test_any_single_term_present(self):
