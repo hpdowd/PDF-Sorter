@@ -12,8 +12,8 @@ import html
 
 from PySide6.QtCore import QMimeData, QSize, Qt
 from PySide6.QtGui import QColor, QDrag, QTextDocument
-from PySide6.QtWidgets import (QStyle, QStyledItemDelegate, QTreeWidget,
-                               QTreeWidgetItem)
+from PySide6.QtWidgets import (QHeaderView, QStyle, QStyledItemDelegate,
+                               QTreeWidget, QTreeWidgetItem)
 
 from src import matching
 from src.ui_qt import theme
@@ -64,8 +64,13 @@ class RulesTable(QTreeWidget):
         self.setHeaderLabels(["RULE NAME", "MATCHES WHEN", "FOLDER"])
         self.setRootIsDecorated(False)
         self.setUniformRowHeights(True)
-        self.setColumnWidth(0, 175)
-        self.setColumnWidth(1, 260)
+        # Name and folder track their content; the summary takes what's left,
+        # so the folder column never truncates at the default panel width.
+        self.setColumnWidth(0, 150)
+        header = self.header()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.setItemDelegateForColumn(1, _RichTextDelegate(self))
         self.setDragEnabled(True)
 
