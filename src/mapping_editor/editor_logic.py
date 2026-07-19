@@ -59,6 +59,20 @@ class EditorLogic:
             self.config.pop("naming_scheme", None)
         self.is_dirty = True
 
+    def get_foldering(self):
+        """The mapping's subfolder-foldering config ({} when off)."""
+        return self.config.get("foldering", {})
+
+    def set_foldering(self, foldering):
+        """Set/clear the foldering config; marks dirty only on an actual change."""
+        if (foldering or {}) == self.config.get("foldering", {}):
+            return
+        if foldering:
+            self.config["foldering"] = foldering
+        else:
+            self.config.pop("foldering", None)
+        self.is_dirty = True
+
     def add_rule(self, phrase, name, dest, match=None):
         """Adds a new mapping rule. An optional match block carries advanced
         (all/any/none) matching; omitted for simple rules."""
@@ -175,8 +189,7 @@ class EditorLogic:
         phrase, rule, dest = match
         _matched, which = matching.match_rule(
             matching.normalize(text), matching.resolve_match_spec(phrase, rule))
-        if dest and "{" in dest:
-            dest = sorter._expand_dest(dest, sorter._date_context(pdf_path, text))
+        dest = sorter._resolve_dest(dest, pdf_path, text)
         name = (rule.get("name") if isinstance(rule, dict) else None) or phrase
         return (f"Matched rule:  {name}\n"
                 f"Matched on:   {which}\n"

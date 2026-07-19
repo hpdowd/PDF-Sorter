@@ -67,6 +67,9 @@ class MappingEditor(tk.Toplevel):
         # --- Right Panel: Template Tree ---
         self._build_right_panel(paned)
 
+        # --- Subfolder foldering (date-based) ---
+        self._build_foldering_panel()
+
         # --- Optional filename scheme ---
         scheme_frame = ttk.Frame(self)
         scheme_frame.pack(fill="x", padx=10, pady=(0, 5))
@@ -161,6 +164,94 @@ class MappingEditor(tk.Toplevel):
         self.template_tree_menu.entryconfig("Delete Folder", state="normal" if is_item_selected else "disabled")
         self.template_tree_menu.tk_popup(event.x_root, event.y_root)
 
+    # --- Foldering panel (Organise into subfolders by date) ---
+
+    # Human labels <-> stored values for the "Group by" and date-source dropdowns.
+    _GROUP_LABEL_TO_VALUE = {"Year": "year", "Year and Quarter": "quarter",
+                             "Year and Month": "year_month"}
+    _GROUP_VALUE_TO_LABEL = {v: k for k, v in _GROUP_LABEL_TO_VALUE.items()}
+    _SOURCE_LABEL_TO_VALUE = {"A date printed in the document": "content",
+                              "File modified date": "file_modified",
+                              "Date saved in the PDF (often wrong)": "pdf_metadata"}
+    _SOURCE_VALUE_TO_LABEL = {v: k for k, v in _SOURCE_LABEL_TO_VALUE.items()}
+    # Sample subfolders shown in the live preview for each grouping.
+    _GROUP_SAMPLE = {"year": ["2024"], "quarter": ["2024", "Q1"], "year_month": ["2024", "03"]}
+
+    def _build_foldering_panel(self):
+        panel = ttk.LabelFrame(self, text="Organise into subfolders", padding=8)
+        panel.pack(fill="x", padx=10, pady=(0, 5))
+
+        row = ttk.Frame(panel)
+        row.pack(fill="x")
+        ttk.Label(row, text="Put files into subfolders by:").pack(side="left")
+        self.fold_by_var = tk.StringVar(value="Nothing")
+        ttk.Combobox(row, textvariable=self.fold_by_var, state="readonly", width=10,
+                     values=["Nothing", "Date"]).pack(side="left", padx=(6, 16))
+
+        ttk.Label(row, text="Group by:").pack(side="left")
+        self.fold_group_var = tk.StringVar(value="Year and Month")
+        self.fold_group_combo = ttk.Combobox(
+            row, textvariable=self.fold_group_var, state="readonly", width=16,
+            values=list(self._GROUP_LABEL_TO_VALUE))
+        self.fold_group_combo.pack(side="left", padx=(6, 16))
+
+        ttk.Label(row, text="Use the date from:").pack(side="left")
+        self.fold_source_var = tk.StringVar(value="A date printed in the document")
+        self.fold_source_combo = ttk.Combobox(
+            row, textvariable=self.fold_source_var, state="readonly", width=32,
+            values=list(self._SOURCE_LABEL_TO_VALUE))
+        self.fold_source_combo.pack(side="left", padx=(6, 0))
+
+        self.fold_preview = ttk.Label(panel, text="", style="Muted.TLabel")
+        self.fold_preview.pack(anchor="w", pady=(6, 0))
+
+        for var in (self.fold_by_var, self.fold_group_var, self.fold_source_var):
+            var.trace_add("write", lambda *a: self._on_foldering_changed())
+        self._update_foldering_state()
+
+    def _on_foldering_changed(self):
+        self.set_dirty(True)
+        self._update_foldering_state()
+
+    def _update_foldering_state(self):
+        """Enable the detail dropdowns only for Date, and refresh the preview."""
+        on_date = self.fold_by_var.get() == "Date"
+        state = "readonly" if on_date else "disabled"
+        self.fold_group_combo.configure(state=state)
+        self.fold_source_combo.configure(state=state)
+        if not on_date:
+            self.fold_preview.configure(
+                text="Files go straight into each rule's destination folder.")
+            return
+        group = self._GROUP_LABEL_TO_VALUE.get(self.fold_group_var.get(), "year_month")
+        parts = self._GROUP_SAMPLE[group]
+        self.fold_preview.configure(
+            text="Example: a file dated 14 Mar 2024 → Statements / " + " / ".join(parts))
+
+    def get_foldering_config(self):
+        """Assemble the foldering config from the dropdowns ({} when off)."""
+        if self.fold_by_var.get() != "Date":
+            return {}
+        return {
+            "by": "date",
+            "group": self._GROUP_LABEL_TO_VALUE.get(self.fold_group_var.get(), "year_month"),
+            "date_source": self._SOURCE_LABEL_TO_VALUE.get(
+                self.fold_source_var.get(), "content"),
+        }
+
+    def _refresh_foldering_ui(self):
+        """Populate the dropdowns from the loaded mapping's foldering config."""
+        f = self.logic.get_foldering()
+        if (f.get("by") or "none") == "date":
+            self.fold_by_var.set("Date")
+            self.fold_group_var.set(
+                self._GROUP_VALUE_TO_LABEL.get(f.get("group") or "year_month", "Year and Month"))
+            self.fold_source_var.set(
+                self._SOURCE_VALUE_TO_LABEL.get(f.get("date_source") or "content",
+                                                "A date printed in the document"))
+        else:
+            self.fold_by_var.set("Nothing")
+
     # --- UI Update Methods (called by Actions) ---
 
     def refresh_all(self, reload_files=False):
@@ -172,6 +263,7 @@ class MappingEditor(tk.Toplevel):
         self.refresh_template_tree()
         dirty = self.logic.is_dirty
         self.scheme_var.set(self.logic.get_naming_scheme())  # trace may flip dirty
+        self._refresh_foldering_ui()                          # traces may flip dirty
         self.set_dirty(dirty)
 
     def refresh_mapping_table(self):

@@ -111,6 +111,26 @@ class TestEditorLogic(unittest.TestCase):
         logic.update_rule("p", "p", "N", "D", None)
         self.assertNotIn("match", logic.mappings["p"])
 
+    def test_set_and_get_foldering(self):
+        logic = EditorLogic()
+        self.assertEqual(logic.get_foldering(), {})
+        logic.set_foldering({"by": "date", "group": "year", "date_source": "content"})
+        self.assertTrue(logic.is_dirty)
+        self.assertEqual(logic.get_foldering()["group"], "year")
+
+    def test_set_foldering_none_clears(self):
+        logic = EditorLogic()
+        logic.config["foldering"] = {"by": "date", "group": "year", "date_source": "content"}
+        logic.set_foldering({})
+        self.assertNotIn("foldering", logic.config)
+
+    def test_set_foldering_no_change_keeps_clean(self):
+        logic = EditorLogic()
+        logic.config["foldering"] = {"by": "date"}
+        logic.is_dirty = False
+        logic.set_foldering({"by": "date"})
+        self.assertFalse(logic.is_dirty)
+
 
 class TestEditorActionsRegression(unittest.TestCase):
     def test_remove_rule(self):
@@ -188,6 +208,19 @@ class TestEditorConfig(unittest.TestCase):
             saved = json.load(f)
         self.assertEqual(saved["_config"]["naming_scheme"], "{rule_name}{ext}")
         self.assertIn("invoice", saved)
+
+    def test_foldering_persists_and_reloads(self):
+        self._write({"invoice": {"name": "Inv", "dest": "Invoices"}})
+        logic = EditorLogic()
+        logic.load_mapping_file(self.path)
+        logic.set_foldering({"by": "date", "group": "year_month", "date_source": "content"})
+        logic.save_mappings()
+
+        reloaded = EditorLogic()
+        reloaded.load_mapping_file(self.path)
+        self.assertEqual(reloaded.get_foldering(),
+                         {"by": "date", "group": "year_month", "date_source": "content"})
+        self.assertNotIn("_config", reloaded.mappings)  # still hidden from the rules
 
     def test_set_naming_scheme_marks_dirty_then_clears(self):
         self._write({"invoice": {"name": "Inv", "dest": "Invoices"}})
