@@ -1,6 +1,7 @@
 import os
 import re
 import shutil
+import subprocess
 import logging
 from dataclasses import dataclass
 from datetime import datetime, date
@@ -69,6 +70,24 @@ if OCR_AVAILABLE:
         pytesseract.pytesseract.tesseract_cmd = _tesseract_cmd
 
 
+def _tesseract_version():
+    """Ask tesseract for its version, without a console window.
+
+    Not pytesseract.get_tesseract_version(): that spawns the binary with a
+    bare check_output, which flashes a terminal window when a windowed app
+    calls it (the OCR calls themselves are properly hidden upstream).
+    """
+    kwargs = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    result = subprocess.run([pytesseract.pytesseract.tesseract_cmd, "--version"],
+                            capture_output=True, text=True, timeout=15, **kwargs)
+    if result.returncode != 0:
+        raise RuntimeError(f"tesseract --version failed: {result.returncode}")
+    first_line = (result.stdout or result.stderr).splitlines()[0]
+    return first_line.split()[1].lstrip("v")
+
+
 def ocr_status():
     """Return (available, detail): whether OCR can actually run, plus a short note.
 
@@ -80,8 +99,7 @@ def ocr_status():
     if not OCR_AVAILABLE:
         return False, "OCR libraries not installed (Pillow/pytesseract)."
     try:
-        version = pytesseract.get_tesseract_version()
-        return True, f"Tesseract {version}"
+        return True, f"Tesseract {_tesseract_version()}"
     except Exception:
         return False, "Tesseract OCR is not installed."
 
