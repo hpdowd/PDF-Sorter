@@ -272,6 +272,18 @@ class TestNaming(unittest.TestCase):
                 s._validate_mapping()  # no warnings expected -> assertLogs raises
 
 
+class TestFromMappingData(unittest.TestCase):
+    def test_builds_without_filesystem_and_matches(self):
+        s = Sorter.from_mapping_data({"invoice": {"name": "I", "dest": "Inv"}})
+        self.assertIsNone(s.template_dir)
+        self.assertEqual(s.find_destination("here is an invoice"), "Inv")
+
+    def test_naming_scheme_read_from_config(self):
+        s = Sorter.from_mapping_data({"_config": {"naming_scheme": "{date}{ext}"},
+                                      "invoice": {"name": "I", "dest": "Inv"}})
+        self.assertEqual(s.naming_scheme, "{date}{ext}")
+
+
 class TestDestExpansion(unittest.TestCase):
     def _sorter(self):
         return make_sorter({"x": {"name": "X", "dest": "Y"}}, "/tmp")

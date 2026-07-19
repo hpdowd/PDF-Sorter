@@ -167,6 +167,21 @@ class EditorActions:
         else:
             messagebox.showwarning("Warning", message, parent=self.view)
 
+    def on_test_pdf(self):
+        """Test a chosen PDF against the current rules and show the outcome."""
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            parent=self.view, title="Choose a PDF to test",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            result = self.logic.test_pdf(path)
+        except Exception as e:
+            messagebox.showerror("Test failed", f"Could not test this PDF:\n{e}", parent=self.view)
+            return
+        messagebox.showinfo(f"Test result — {os.path.basename(path)}", result, parent=self.view)
+
     def on_remove_rule(self):
         """Handle removing a mapping rule."""
         selected_item = self.view.mapping_table.selection()

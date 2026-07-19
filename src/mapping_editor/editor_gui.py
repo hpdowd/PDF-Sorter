@@ -91,7 +91,7 @@ class MappingEditor(tk.Toplevel):
     def _build_left_panel(self, parent):
         left_frame = ttk.Frame(parent)
         parent.add(left_frame, weight=3)
-        ttk.Label(left_frame, text="Phrase / Keyword → Destination", font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=5, pady=(0, 2))
+        ttk.Label(left_frame, text="Matching rules", font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=5, pady=(0, 2))
         
         self.mapping_table = MappingTable(left_frame, on_item_drag=self.actions.on_item_drag_start)
         self.mapping_table.pack(fill="both", expand=True)
@@ -107,6 +107,11 @@ class MappingEditor(tk.Toplevel):
         ttk.Button(button_frame, text="Remove", command=self.actions.on_remove_rule).pack(side="left", fill="x", expand=True, padx=(0, 5))
         ttk.Button(button_frame, text="Move Up", command=lambda: self.actions.on_move_rule("up")).pack(side="left", fill="x", expand=True, padx=(0, 5))
         ttk.Button(button_frame, text="Move Down", command=lambda: self.actions.on_move_rule("down")).pack(side="left", fill="x", expand=True)
+
+        test_frame = ttk.Frame(left_frame)
+        test_frame.pack(fill="x", pady=(5, 0))
+        ttk.Button(test_frame, text="Test a PDF against these rules…",
+                   command=self.actions.on_test_pdf).pack(side="left")
 
     def _build_right_panel(self, parent):
         right_frame = ttk.Frame(parent)

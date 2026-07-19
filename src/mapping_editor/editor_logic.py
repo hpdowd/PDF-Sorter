@@ -1,6 +1,6 @@
 import os
 import shutil
-from src import utils
+from src import utils, matching
 
 class EditorLogic:
     """
@@ -153,6 +153,34 @@ class EditorLogic:
                 os.makedirs(folder_path, exist_ok=True)
                 created += 1
         return created
+
+    def test_pdf(self, pdf_path):
+        """Run the current (possibly unsaved) rules against one PDF and report
+        which rule matched, on which term, and where it would go.
+
+        Returns a human-readable multi-line string for a dialog. Reuses the real
+        Sorter so what's shown here is exactly what a sort would do.
+        """
+        from src.sorter import Sorter  # local import to avoid a heavy import at load
+        data = {"_config": self.config, **self.mappings} if self.config else dict(self.mappings)
+        sorter = Sorter.from_mapping_data(data, self.template_dir)
+
+        text = sorter.read_pdf_text(pdf_path)
+        if not text:
+            return "No readable text found in this PDF (even after OCR)."
+        match = sorter.find_matching_rule(text)
+        if not match:
+            return "No rule matched this document."
+
+        phrase, rule, dest = match
+        _matched, which = matching.match_rule(
+            matching.normalize(text), matching.resolve_match_spec(phrase, rule))
+        if dest and "{" in dest:
+            dest = sorter._expand_dest(dest, sorter._date_context(pdf_path, text))
+        name = (rule.get("name") if isinstance(rule, dict) else None) or phrase
+        return (f"Matched rule:  {name}\n"
+                f"Matched on:   {which}\n"
+                f"Destination:  {dest}")
 
     def get_all_destinations(self):
         """Get all possible destination folders from the template directory."""

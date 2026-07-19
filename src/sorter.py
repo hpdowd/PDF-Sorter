@@ -75,6 +75,24 @@ class Sorter:
         if not os.path.exists(self.template_dir):
             os.makedirs(self.template_dir)
 
+    @classmethod
+    def from_mapping_data(cls, mapping_data, template_dir=None):
+        """Build a Sorter around already-loaded mapping data, without any
+        filesystem side effects (no mapping load, no template dir creation).
+
+        Used to test a single PDF against the editor's current — possibly
+        unsaved — rules. Reuses the exact matching/expansion the real sort uses.
+        """
+        s = cls.__new__(cls)
+        s.status_callback = None
+        s.progress_callback = None
+        s.mapping_path = None
+        s.template_dir = template_dir
+        s.mapping_data = mapping_data or {}
+        s.naming_scheme = (s.mapping_data.get("_config") or {}).get("naming_scheme") or None
+        s._cancelled = False
+        return s
+
     def cancel(self):
         """Request cooperative cancellation of an in-progress plan/execute.
 

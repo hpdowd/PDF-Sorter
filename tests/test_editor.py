@@ -9,6 +9,7 @@ import json
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from src.mapping_editor.editor_logic import EditorLogic
 from src.mapping_editor.editor_actions import EditorActions
@@ -130,6 +131,36 @@ class TestEditorActionsRegression(unittest.TestCase):
         view.mapping_table._sel = ("invoice",)
         actions.on_move_rule("down")
         self.assertEqual(list(logic.mappings), ["receipt", "invoice", "report"])
+
+
+class TestTestPdf(unittest.TestCase):
+    """Exercises 'Test a PDF'. PDF reading is mocked (per the suite's fitz stub);
+    matching, date-token resolution, and reporting are the real thing."""
+    TEXT = "This is an Employee Questionnaire dated 2024-03-01"
+
+    def _test(self, mappings, text=TEXT):
+        logic = EditorLogic()
+        logic.mappings = mappings
+        with patch("src.sorter.Sorter.read_pdf_text", return_value=text):
+            return logic.test_pdf("dummy.pdf")
+
+    def test_reports_match_and_destination(self):
+        result = self._test({"Employee Questionnaire": {"name": "Questionnaire",
+                                                        "dest": "HR/Questionnaires"}})
+        self.assertIn("Questionnaire", result)
+        self.assertIn("HR/Questionnaires", result)
+
+    def test_resolves_date_tokens_in_destination(self):
+        result = self._test({"Employee Questionnaire": {"name": "Q", "dest": "HR/{doc_year}"}})
+        self.assertIn("HR/2024", result)
+
+    def test_reports_no_match(self):
+        result = self._test({"phrase that does not appear zzz": {"name": "X", "dest": "X"}})
+        self.assertIn("No rule matched", result)
+
+    def test_reports_unreadable(self):
+        result = self._test({"invoice": {"name": "I", "dest": "Inv"}}, text="")
+        self.assertIn("No readable text", result)
 
 
 class TestEditorConfig(unittest.TestCase):
