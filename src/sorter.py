@@ -14,8 +14,8 @@ logger = logging.getLogger("ocr_file_sorter.sorter")
 class PlanItem:
     """One PDF's planned outcome from a (non-destructive) sort plan."""
     src: str                 # absolute source path
-    status: str              # "matched" | "unmatched" | "unreadable" | "error"
-    phrase: str = None       # matched phrase (when matched)
+    status: str              # "matched" | "unmatched" | "unreadable" | "error" | "skipped"
+    phrase: str = None       # matched phrase (when matched); "(manual)" for a preview override
     dest: str = None         # destination folder, relative to the template dir (when matched)
     dest_name: str = None    # proposed filename after any renaming (when matched)
     message: str = ""        # human-readable note (e.g. error text)
@@ -193,6 +193,22 @@ class Sorter:
         """Return the destination folder for the first matching rule, or None."""
         match = self.find_matching_rule(text)
         return match[2] if match else None
+
+    def destination_folders(self):
+        """Unique, sorted destination folders configured by the mapping's rules.
+
+        This is the curated set the preview's manual-override chooser offers, so a
+        user can only reassign a file to a real, already-configured destination
+        (no free-text folder typing — the target group is non-technical).
+        """
+        dests = set()
+        for phrase, rule in self.mapping_data.items():
+            if phrase in utils.RESERVED_MAPPING_KEYS:
+                continue
+            dest = rule.get("dest") if isinstance(rule, dict) else rule
+            if dest:
+                dests.add(dest)
+        return sorted(dests)
 
     def _validate_mapping(self):
         """Log (and surface) a warning for any rule that has no usable destination."""

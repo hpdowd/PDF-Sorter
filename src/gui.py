@@ -7,7 +7,7 @@ from tkinter import filedialog, messagebox, ttk
 from tkinterdnd2 import DND_FILES, TkinterDnD
 import threading
 
-from src import sorter, utils, __version__
+from src import sorter, utils, theme, __version__
 
 logger = logging.getLogger("ocr_file_sorter.gui")
 from src.mapping_editor.editor_gui import MappingEditor
@@ -174,10 +174,10 @@ class FileSorterGUI:
         self.folder_listbox.bind("<Configure>", lambda e: self._update_watermark())
 
     def _setup_styles(self):
-        # Emphasize the primary action by weight/size. Native (vista) themed buttons
-        # don't reliably honor a background color, so we lean on font + padding.
-        style = ttk.Style()
-        style.configure("Primary.TButton", font=("Segoe UI", 10, "bold"), padding=(14, 8))
+        # One shared theme for the whole app (clam-based, no extra deps). It defines
+        # Primary.TButton as a filled accent button — clam honors button backgrounds,
+        # unlike the native vista theme the app used before.
+        theme.apply_theme(self.root)
 
     def _build_menubar(self):
         menubar = tk.Menu(self.root)
@@ -336,7 +336,7 @@ class FileSorterGUI:
             messagebox.showinfo("Nothing to sort", "No PDF files were found in the selected folders.")
             self._reset_after_sort()
             return
-        dialog = SortPreviewDialog(self.root, plan)
+        dialog = SortPreviewDialog(self.root, plan, sorter_obj)
         if not dialog.confirmed:
             self.status_label.config(text="Cancelled")
             self._reset_after_sort()
@@ -355,6 +355,7 @@ class FileSorterGUI:
             self.last_output_dir = sorter_obj.template_dir
             unmatched = sum(1 for p in plan if p.status == "unmatched")
             problems = sum(1 for p in plan if p.status in ("error", "unreadable"))
+            skipped = sum(1 for p in plan if p.status == "skipped")
             verb = "Copied" if copy else "Moved"
             if sorter_obj.cancelled:
                 matched_total = sum(1 for p in plan if p.status == "matched")
@@ -363,6 +364,8 @@ class FileSorterGUI:
             else:
                 summary = (f"{verb} {count} file(s)."
                            f"\nUnmatched: {unmatched}    Unreadable/errors: {problems}")
+                if skipped:
+                    summary += f"    Skipped: {skipped}"
             self.root.after(0, lambda: self._after_execute(summary))
         except Exception as e:
             logger.exception("Execute failed")
@@ -457,6 +460,7 @@ class PreferencesDialog(tk.Toplevel):
 
     def __init__(self, master, first_page_only, deep_audit):
         super().__init__(master)
+        self.configure(background=theme.BG)
         self.title("Settings")
         self.transient(master)
         self.resizable(False, False)
@@ -497,37 +501,48 @@ class PreferencesDialog(tk.Toplevel):
 
 
 class SortPreviewDialog(tk.Toplevel):
-    """Shows each PDF's planned outcome; the user picks Move, Copy, or Cancel."""
+    """Shows each PDF's planned outcome; the user picks Move, Copy, or Cancel.
+
+    The plan is editable before it runs: double-click a file (or use "Change
+    destination...") to send it to a different configured folder, or mark it not
+    to be sorted. Edits mutate the PlanItems in place, so the same objects flow on
+    to Sorter.execute — no separate override bookkeeping.
+    """
 
     STATUS_LABEL = {
         "matched": "will sort",
         "unmatched": "no match",
         "unreadable": "unreadable",
         "error": "error",
+        "skipped": "won't sort",
     }
 
-    def __init__(self, master, plan):
+    def __init__(self, master, plan, sorter_obj):
         super().__init__(master)
+        self.configure(background=theme.BG)
         self.title("Preview sort")
-        self.geometry("720x440")
+        self.geometry("720x470")
         self.transient(master)
         self.confirmed = False
         self.copy_mode = False
+        self._sorter = sorter_obj
+        self._folders = sorter_obj.destination_folders()
 
         matched = [p for p in plan if p.status == "matched"]
         unmatched = [p for p in plan if p.status == "unmatched"]
         problems = [p for p in plan if p.status in ("unreadable", "error")]
 
+        self.summary_label = ttk.Label(self, font=("Segoe UI", 10, "bold"))
+        self.summary_label.pack(anchor="w", padx=10, pady=(10, 2))
         ttk.Label(
-            self,
-            text=(f"{len(matched)} to sort    ·    {len(unmatched)} no match    ·    "
-                  f"{len(problems)} unreadable/error"),
-            font=("Segoe UI", 10, "bold"),
-        ).pack(anchor="w", padx=10, pady=(10, 5))
+            self, foreground="#57606a",
+            text="Double-click a file to change where it goes, or mark it not to be sorted.",
+        ).pack(anchor="w", padx=10, pady=(0, 5))
 
         frame = ttk.Frame(self)
         frame.pack(fill="both", expand=True, padx=10)
-        tree = ttk.Treeview(frame, columns=("outcome", "matched", "dest"), show="tree headings")
+        self.tree = tree = ttk.Treeview(frame, columns=("outcome", "matched", "dest"),
+                                        show="tree headings")
         tree.heading("#0", text="File")
         tree.heading("outcome", text="Outcome")
         tree.heading("matched", text="Matched phrase")
@@ -545,33 +560,97 @@ class SortPreviewDialog(tk.Toplevel):
         tree.tag_configure("unmatched", foreground="#57606a")
         tree.tag_configure("unreadable", foreground="#9a6700")
         tree.tag_configure("error", foreground="#cf222e")
+        tree.tag_configure("skipped", foreground="#57606a")
 
+        # Keep insertion order stable across edits, and map each row to its PlanItem.
         self._rows = matched + unmatched + problems
+        self._item_by_iid = {}
         for p in self._rows:
-            dest = f"{p.dest}/{p.dest_name}" if p.status == "matched" else p.message
-            phrase = p.phrase if p.status == "matched" else ""
-            tree.insert("", "end", text=p.filename,
-                        values=(self.STATUS_LABEL.get(p.status, p.status), phrase, dest),
-                        tags=(p.status,))
+            iid = tree.insert("", "end", text=p.filename,
+                              values=self._row_values(p), tags=(p.status,))
+            self._item_by_iid[iid] = p
+        tree.bind("<Double-1>", self._on_double_click)
 
         btns = ttk.Frame(self)
         btns.pack(fill="x", padx=10, pady=10)
         export_btn = ttk.Button(btns, text="Export...", command=self._export_csv)
         export_btn.pack(side="left")
         utils.ToolTip(export_btn, "Save this preview (each file and where it would go) to a CSV.")
-        cancel_btn = ttk.Button(btns, text="Cancel", command=self._cancel)
-        cancel_btn.pack(side="right")
-        copy_btn = ttk.Button(btns, text="Copy", command=self._copy,
-                              state=("normal" if matched else "disabled"))
-        copy_btn.pack(side="right", padx=(0, 5))
-        move_btn = ttk.Button(btns, text="Move", command=self._move,
-                              state=("normal" if matched else "disabled"))
-        move_btn.pack(side="right", padx=(0, 5))
+        change_btn = ttk.Button(btns, text="Change destination...", command=self._edit_selected)
+        change_btn.pack(side="left", padx=(5, 0))
+        utils.ToolTip(change_btn, "Send the selected file to a different folder, or don't sort it.")
+        self.cancel_btn = ttk.Button(btns, text="Cancel", command=self._cancel)
+        self.cancel_btn.pack(side="right")
+        self.copy_btn = ttk.Button(btns, text="Copy", command=self._copy)
+        self.copy_btn.pack(side="right", padx=(0, 5))
+        self.move_btn = ttk.Button(btns, text="Move", command=self._move, style="Primary.TButton")
+        self.move_btn.pack(side="right", padx=(0, 5))
 
+        self._refresh_actions()
         self.protocol("WM_DELETE_WINDOW", self._cancel)
         self.grab_set()
-        (move_btn if matched else cancel_btn).focus_set()
+        (self.move_btn if matched else self.cancel_btn).focus_set()
         self.wait_window()
+
+    def _row_values(self, p):
+        """The (outcome, phrase, destination) cells shown for one PlanItem."""
+        if p.status == "matched":
+            return (self.STATUS_LABEL["matched"], p.phrase or "", f"{p.dest}/{p.dest_name}")
+        if p.status == "skipped":
+            return (self.STATUS_LABEL["skipped"], "", "(won't be sorted)")
+        return (self.STATUS_LABEL.get(p.status, p.status), "", p.message)
+
+    def _refresh_actions(self):
+        """Enable Move/Copy only while at least one file is set to sort, and keep
+        the running tally in the header current."""
+        counts = {}
+        for p in self._rows:
+            counts[p.status] = counts.get(p.status, 0) + 1
+        matched = counts.get("matched", 0)
+        parts = [f"{matched} to sort",
+                 f"{counts.get('unmatched', 0)} no match",
+                 f"{counts.get('unreadable', 0) + counts.get('error', 0)} unreadable/error"]
+        if counts.get("skipped"):
+            parts.append(f"{counts['skipped']} won't sort")
+        self.summary_label.config(text="    ·    ".join(parts))
+        state = "normal" if matched else "disabled"
+        self.move_btn.config(state=state)
+        self.copy_btn.config(state=state)
+
+    def _on_double_click(self, event):
+        iid = self.tree.identify_row(event.y)
+        if iid:
+            self._edit_item(iid)
+
+    def _edit_selected(self):
+        sel = self.tree.selection()
+        if sel:
+            self._edit_item(sel[0])
+        else:
+            messagebox.showinfo("Change destination",
+                                "Select a file first, then choose its destination.", parent=self)
+
+    def _edit_item(self, iid):
+        p = self._item_by_iid[iid]
+        current = p.dest if p.status == "matched" else None
+        chooser = DestinationChooser(self, p.filename, self._folders, current)
+        if not chooser.result:
+            return
+        action, folder = chooser.result
+        if action == "skip":
+            p.status = "skipped"
+        else:  # "dest"
+            # Reassigning only changes the target folder; the proposed filename
+            # (any naming-scheme rename) is preserved. A file that had no match
+            # keeps its original name and is tagged "(manual)" so the audit trail
+            # shows it was placed by hand rather than by a rule.
+            if p.status != "matched":
+                p.dest_name = p.filename
+                p.phrase = "(manual)"
+            p.dest = folder
+            p.status = "matched"
+        self.tree.item(iid, values=self._row_values(p), tags=(p.status,))
+        self._refresh_actions()
 
     def _move(self):
         self.copy_mode = False
@@ -599,11 +678,67 @@ class SortPreviewDialog(tk.Toplevel):
                 writer = csv.writer(f)
                 writer.writerow(["File", "Outcome", "Matched phrase", "Destination"])
                 for p in self._rows:
-                    dest = f"{p.dest}/{p.dest_name}" if p.status == "matched" else p.message
-                    phrase = p.phrase if p.status == "matched" else ""
-                    writer.writerow([p.filename, self.STATUS_LABEL.get(p.status, p.status), phrase, dest])
+                    outcome, phrase, dest = self._row_values(p)
+                    writer.writerow([p.filename, outcome, phrase, dest])
         except OSError as e:
             messagebox.showerror("Export failed", str(e), parent=self)
+
+
+class DestinationChooser(tk.Toplevel):
+    """Pick a destination folder for one file, or mark it not to be sorted.
+
+    result is None if cancelled, ("dest", folder) to file into `folder`, or
+    ("skip", None) to leave the file where it is.
+    """
+
+    def __init__(self, master, filename, folders, current=None):
+        super().__init__(master)
+        self.configure(background=theme.BG)
+        self.title("Change destination")
+        self.transient(master)
+        self.resizable(False, False)
+        self.result = None
+        self._folders = folders
+
+        frame = ttk.Frame(self)
+        frame.pack(fill="both", expand=True, padx=16, pady=16)
+        ttk.Label(frame, text="File:").grid(row=0, column=0, sticky="w")
+        ttk.Label(frame, text=filename, font=("Segoe UI", 9, "bold")).grid(
+            row=0, column=1, sticky="w", padx=(6, 0))
+        ttk.Label(frame, text="Send to:").grid(row=1, column=0, sticky="w", pady=(12, 0))
+        self.var = tk.StringVar(value=current or (folders[0] if folders else ""))
+        combo = ttk.Combobox(frame, textvariable=self.var, values=folders,
+                             state="readonly", width=34)
+        combo.grid(row=1, column=1, sticky="we", padx=(6, 0), pady=(12, 0))
+
+        btns = ttk.Frame(frame)
+        btns.grid(row=2, column=0, columnspan=2, sticky="e", pady=(18, 0))
+        assign_btn = ttk.Button(btns, text="Assign", command=self._assign,
+                                state=("normal" if folders else "disabled"))
+        assign_btn.pack(side="left")
+        ttk.Button(btns, text="Don't sort this file", command=self._skip).pack(
+            side="left", padx=(6, 0))
+        ttk.Button(btns, text="Cancel", command=self._cancel).pack(side="left", padx=(6, 0))
+
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.bind("<Escape>", lambda e: self._cancel())
+        self.grab_set()
+        (combo if folders else assign_btn).focus_set()
+        self.wait_window()
+
+    def _assign(self):
+        folder = self.var.get()
+        if folder:
+            self.result = ("dest", folder)
+        self.destroy()
+
+    def _skip(self):
+        self.result = ("skip", None)
+        self.destroy()
+
+    def _cancel(self):
+        self.result = None
+        self.destroy()
 
 
 def main():

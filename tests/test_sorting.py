@@ -68,6 +68,58 @@ class TestFindDestination(unittest.TestCase):
         self.assertIsNone(s.find_destination("a statement of account"))
 
 
+class TestDestinationFolders(unittest.TestCase):
+    def test_unique_sorted_and_skips_reserved_and_empty(self):
+        s = make_sorter({
+            "_config": {"naming_scheme": "x"},        # reserved, ignored
+            "invoice": {"name": "Inv", "dest": "Billing"},
+            "receipt": {"name": "Rec", "dest": "Billing"},   # duplicate dest
+            "statement": {"name": "St", "dest": "Statements"},
+            "broken": {"name": "B", "dest": ""},       # no dest, ignored
+        }, "/tmp")
+        self.assertEqual(s.destination_folders(), ["Billing", "Statements"])
+
+    def test_old_format_string_dests_included(self):
+        s = make_sorter({"Receipt": "Receipts", "Invoice": "Invoices"}, "/tmp")
+        self.assertEqual(s.destination_folders(), ["Invoices", "Receipts"])
+
+    def test_empty_mapping_returns_empty_list(self):
+        s = make_sorter({}, "/tmp")
+        self.assertEqual(s.destination_folders(), [])
+
+
+class TestPreviewOverrides(unittest.TestCase):
+    """Execute keys off status/dest/dest_name only, so the editable preview can
+    mutate PlanItems directly. These lock that contract in place."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.inp = os.path.join(self.tmp, "in")
+        os.makedirs(self.inp)
+        self.tpl = os.path.join(self.tmp, "tpl")
+        os.makedirs(self.tpl)
+        for n in ("a.pdf", "b.pdf"):
+            open(os.path.join(self.inp, n), "w").close()
+        self.s = make_sorter({"invoice": {"name": "Inv", "dest": "Invoices"}}, self.tpl)
+        self.s.read_pdf_text = lambda p, first_page_only=False: "an invoice"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def test_skipped_item_is_not_moved(self):
+        plan = self.s.plan([self.inp])
+        plan[0].status = "skipped"                    # user unchecked this file
+        _manifest, count = self.s.execute(plan)
+        self.assertEqual(count, 1)                     # only the other file moved
+        self.assertTrue(os.path.exists(os.path.join(self.inp, plan[0].filename)))
+
+    def test_reassigned_destination_is_honored(self):
+        plan = self.s.plan([self.inp])
+        plan[0].dest = "Elsewhere"                     # user changed the folder
+        self.s.execute(plan)
+        self.assertTrue(os.path.exists(os.path.join(self.tpl, "Elsewhere", plan[0].filename)))
+
+
 class TestMappingValidation(unittest.TestCase):
     def test_warns_on_rules_missing_dest(self):
         s = make_sorter({
