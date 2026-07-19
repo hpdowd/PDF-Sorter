@@ -10,6 +10,7 @@ LAST_MAPPING_KEY = "last_mapping_file"
 OUTPUT_DIR_KEY = "output_dir"
 DEEP_AUDIT_KEY = "deep_audit"
 FIRST_PAGE_KEY = "first_page_only"
+HIDE_OCR_WARNING_KEY = "hide_ocr_warning"
 
 def _mappings_dir():
     """Per-user, writable mappings directory.

@@ -15,15 +15,15 @@ from PySide6.QtGui import QAction, QPainter
 from PySide6.QtWidgets import (QComboBox, QFileDialog, QGridLayout, QGroupBox,
                                QHBoxLayout, QLabel, QLineEdit, QListWidget,
                                QMainWindow, QMessageBox, QProgressBar,
-                               QPushButton, QVBoxLayout, QWidget)
+                               QPushButton, QToolButton, QVBoxLayout, QWidget)
 
 from src import __version__, sorter, utils
 from src.ui_qt import theme
 from src.ui_qt.dialogs import PreferencesDialog, SortPreviewDialog
 from src.ui_qt.editor import MappingEditor
-from src.utils import (DEEP_AUDIT_KEY, FIRST_PAGE_KEY, LAST_MAPPING_KEY,
-                       MAPPINGS_DIR, OUTPUT_DIR_KEY, load_settings,
-                       save_settings)
+from src.utils import (DEEP_AUDIT_KEY, FIRST_PAGE_KEY, HIDE_OCR_WARNING_KEY,
+                       LAST_MAPPING_KEY, MAPPINGS_DIR, OUTPUT_DIR_KEY,
+                       load_settings, save_settings)
 
 logger = logging.getLogger("ocr_file_sorter.gui")
 
@@ -195,10 +195,22 @@ class MainWindow(QMainWindow):
         button_row.addWidget(settings_btn)
 
         # Persistent OCR warning, shown only when OCR can't run, just above the
-        # status bar.
-        self.ocr_warning = QLabel()
-        self.ocr_warning.setProperty("warning", True)
-        self.ocr_warning.setWordWrap(True)
+        # status bar. Dismissable (and remembered) for users who don't want OCR.
+        self.ocr_warning = QWidget()
+        warn_row = QHBoxLayout(self.ocr_warning)
+        warn_row.setContentsMargins(0, 0, 0, 0)
+        self.ocr_warning_label = QLabel()
+        self.ocr_warning_label.setProperty("warning", True)
+        self.ocr_warning_label.setWordWrap(True)
+        self.ocr_warning_label.setOpenExternalLinks(True)
+        warn_row.addWidget(self.ocr_warning_label, 1)
+        dismiss = QToolButton()
+        dismiss.setText("✕")
+        dismiss.setToolTip("Hide this warning (it won't be shown again).")
+        dismiss.setAutoRaise(True)
+        dismiss.setCursor(Qt.CursorShape.PointingHandCursor)
+        dismiss.clicked.connect(self._dismiss_ocr_warning)
+        warn_row.addWidget(dismiss, 0, Qt.AlignmentFlag.AlignTop)
         outer.addWidget(self.ocr_warning)
         self._update_ocr_indicator()
 
@@ -480,14 +492,22 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Cancelled")
 
     def _update_ocr_indicator(self):
-        """Show a persistent warning when OCR (Tesseract) can't run, hide it otherwise."""
+        """Show a persistent warning when OCR (Tesseract) can't run, hide it
+        otherwise — or permanently once the user has dismissed it."""
         available, detail = sorter.ocr_status()
-        if available:
+        if available or self.settings.get(HIDE_OCR_WARNING_KEY, False):
             self.ocr_warning.hide()
         else:
-            self.ocr_warning.setText(
-                f"⚠  OCR unavailable — scanned/image PDFs can't be read.  {detail}")
+            self.ocr_warning_label.setText(
+                f"⚠  OCR unavailable — scanned/image PDFs can't be read.  {detail}  "
+                f'<a href="https://github.com/UB-Mannheim/tesseract/wiki">Get Tesseract</a>'
+                " (choose “install just for me” — no admin needed).")
             self.ocr_warning.show()
+
+    def _dismiss_ocr_warning(self):
+        self.settings[HIDE_OCR_WARNING_KEY] = True
+        save_settings(self.settings)
+        self.ocr_warning.hide()
 
     def _reset_after_sort(self):
         self.sort_btn.setEnabled(True)
