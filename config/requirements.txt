@@ -1,5 +1,5 @@
 # Core runtime dependencies for PDF Sorter
-tkinterdnd2>=0.3.0
+PySide6>=6.6.0
 PyMuPDF>=1.23.0
 Pillow>=10.0.0
 pytesseract>=0.3.10

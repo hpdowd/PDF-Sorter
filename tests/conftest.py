@@ -5,8 +5,13 @@ PyMuPDF isn't installed in the local dev environment. On CI the real package is
 present, so `setdefault` leaves it untouched and tests run against real PyMuPDF.
 Tests that exercise PDF reading mock `fitz.open` explicitly, so the stub is only
 a shim to make the import resolve.
+
+Qt tests run headless: the offscreen platform plugin needs no display server,
+locally or on the CI runner.
 """
+import os
 import sys
 from unittest.mock import MagicMock
 
 sys.modules.setdefault("fitz", MagicMock())
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

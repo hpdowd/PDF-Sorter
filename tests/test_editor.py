@@ -1,8 +1,9 @@
 """Tests for the mapping editor logic and the Remove/Move actions.
 
-on_remove_rule / on_move_rule previously unpacked a 3-column table row into two
-variables (phrase, _), raising ValueError and silently failing in the no-console
-release build. These tests guard that regression.
+Remove/Move previously had a regression where a table row was mis-unpacked,
+raising ValueError and silently failing in the no-console release build. The
+action-layer tests guard that path, now against the real Qt editor (offscreen)
+rather than a fake table.
 """
 import os
 import json
@@ -12,7 +13,6 @@ import unittest
 from unittest.mock import patch
 
 from src.mapping_editor.editor_logic import EditorLogic
-from src.mapping_editor.editor_actions import EditorActions
 
 
 BASE = {
@@ -20,58 +20,6 @@ BASE = {
     "receipt": {"name": "Rec", "dest": "Receipts"},
     "report": {"name": "Rep", "dest": "Reports"},
 }
-
-
-class FakeTable:
-    """Minimal stand-in for the MappingTable Treeview. The row iid is the phrase
-    key, mirroring the real widget; selection() yields that key."""
-    def __init__(self):
-        self._rows = {}
-        self._order = []
-        self._sel = ()
-
-    def set_rows(self, mappings):
-        self._order = list(mappings.keys())
-        self._rows = {p: (r["name"], p, r["dest"]) for p, r in mappings.items()}
-
-    def selection(self):
-        return (self._sel[0],) if self._sel else ()
-
-    def item(self, item_id, what):
-        return self._rows[item_id]
-
-    def get_children(self):
-        return tuple(self._order)
-
-    def selection_set(self, item_id):
-        self._sel = (item_id,)
-
-    def see(self, item_id):
-        pass
-
-
-class FakeView:
-    def __init__(self, logic):
-        self.logic = logic
-        self.mapping_table = FakeTable()
-        self.dirty = None
-        self._rebuild()
-
-    def _rebuild(self):
-        self.mapping_table.set_rows(self.logic.mappings)
-
-    def refresh_mapping_table(self):
-        self._rebuild()
-
-    def set_dirty(self, value):
-        self.dirty = value
-
-
-def make(mappings):
-    logic = EditorLogic()
-    logic.mappings = dict(mappings)
-    view = FakeView(logic)
-    return logic, view, EditorActions(view, logic)
 
 
 class TestEditorLogic(unittest.TestCase):
@@ -133,24 +81,57 @@ class TestEditorLogic(unittest.TestCase):
 
 
 class TestEditorActionsRegression(unittest.TestCase):
+    """Remove/Move driven through the real Qt editor and rules table."""
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
+
+    def make(self, mappings):
+        import copy
+        from src.ui_qt.editor import MappingEditor
+        # Keep the editor away from the real per-user mappings directory.
+        with patch("src.utils.MappingUtils.get_available_mappings", return_value=[]):
+            editor = MappingEditor()
+        # Deep copy: actions like a rule drop mutate the nested rule dicts.
+        editor.logic.mappings = copy.deepcopy(mappings)
+        editor.refresh_mapping_table()
+        return editor
+
     def test_remove_rule(self):
-        logic, view, actions = make(BASE)
-        view.mapping_table._sel = ("invoice",)
-        actions.on_remove_rule()
-        self.assertEqual(list(logic.mappings), ["receipt", "report"])
-        self.assertTrue(view.dirty)
+        editor = self.make(BASE)
+        editor.rules_table.select_phrase("invoice")
+        editor.on_remove_rule()
+        self.assertEqual(list(editor.logic.mappings), ["receipt", "report"])
+        self.assertTrue(editor.logic.is_dirty)
 
     def test_move_up(self):
-        logic, view, actions = make(BASE)
-        view.mapping_table._sel = ("report",)
-        actions.on_move_rule("up")
-        self.assertEqual(list(logic.mappings), ["invoice", "report", "receipt"])
+        editor = self.make(BASE)
+        editor.rules_table.select_phrase("report")
+        editor.on_move_rule("up")
+        self.assertEqual(list(editor.logic.mappings), ["invoice", "report", "receipt"])
+        # The moved rule stays selected after the refresh.
+        self.assertEqual(editor.rules_table.selected_phrase(), "report")
 
     def test_move_down(self):
-        logic, view, actions = make(BASE)
-        view.mapping_table._sel = ("invoice",)
-        actions.on_move_rule("down")
-        self.assertEqual(list(logic.mappings), ["receipt", "invoice", "report"])
+        editor = self.make(BASE)
+        editor.rules_table.select_phrase("invoice")
+        editor.on_move_rule("down")
+        self.assertEqual(list(editor.logic.mappings), ["receipt", "invoice", "report"])
+
+    def test_rule_drop_assigns_destination(self):
+        editor = self.make(BASE)
+        editor.on_rule_dropped("invoice", "Archive/2024")
+        self.assertEqual(editor.logic.mappings["invoice"]["dest"], "Archive/2024")
+        self.assertTrue(editor.logic.is_dirty)
+
+    def test_rule_drop_same_destination_keeps_clean(self):
+        editor = self.make(BASE)
+        editor.logic.is_dirty = False
+        editor.on_rule_dropped("invoice", "Invoices")
+        self.assertFalse(editor.logic.is_dirty)
 
 
 class TestTestPdf(unittest.TestCase):

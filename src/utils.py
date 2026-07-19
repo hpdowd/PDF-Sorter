@@ -4,8 +4,6 @@ import json
 import shutil
 import logging
 from logging.handlers import RotatingFileHandler
-import tkinter as tk
-from tkinter import messagebox
 
 # --- Constants ---
 LAST_MAPPING_KEY = "last_mapping_file"
@@ -157,27 +155,6 @@ def clear_manifest():
     except OSError:
         pass
 
-# --- Dialog helpers ---
-# These accept either show_x(message) or show_x(title, message), so both the
-# main window (single-arg) and the mapping editor (title + message) can use them.
-def show_error(title, message=None, parent=None):
-    """Show an error dialog."""
-    if message is None:
-        title, message = "Error", title
-    messagebox.showerror(title, message, parent=parent)
-
-def show_warning(title, message=None, parent=None):
-    """Show a warning dialog."""
-    if message is None:
-        title, message = "Warning", title
-    messagebox.showwarning(title, message, parent=parent)
-
-def show_info(title, message=None, parent=None):
-    """Show an informational dialog."""
-    if message is None:
-        title, message = "Information", title
-    messagebox.showinfo(title, message, parent=parent)
-
 class MappingUtils:
     """A utility class for handling mapping files."""
 
@@ -226,36 +203,3 @@ class MappingUtils:
         """Saves mapping data to a JSON file."""
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
-
-# --- UI Helpers ---
-class ToolTip:
-    """
-    Create a tooltip for a given widget.
-    """
-    def __init__(self, widget, text):
-        self.widget = widget
-        self.text = text
-        self.tipwindow = None
-        widget.bind("<Enter>", self.show_tip)
-        widget.bind("<Leave>", self.hide_tip)
-
-    def show_tip(self, event=None):
-        if self.tipwindow or not self.text:
-            return
-        x = self.widget.winfo_pointerx() + 20
-        y = self.widget.winfo_pointery() + 10
-        self.tipwindow = tw = tk.Toplevel(self.widget)
-        tw.wm_overrideredirect(True)
-        tw.wm_geometry(f"+{x}+{y}")
-        label = tk.Label(
-            tw, text=self.text, justify=tk.LEFT,
-            background="#ffffe0", relief=tk.SOLID, borderwidth=1,
-            font=("tahoma", "8", "normal")
-        )
-        label.pack(ipadx=1)
-
-    def hide_tip(self, event=None):
-        tw = self.tipwindow
-        self.tipwindow = None
-        if tw:
-            tw.destroy()
