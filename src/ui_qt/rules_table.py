@@ -23,38 +23,77 @@ _ROW_H = 30
 
 
 def segments_to_html(segments):
-    """Render describe_match_segments output as a rich-text line."""
-    parts = []
-    for text, role in segments:
+    """Render describe_match_segments output as rich text, one line per
+    match role: the *any* terms first, then all the *and* terms together,
+    then all the *not* terms. Simple rules stay a single line."""
+    # The segments arrive as parts joined by " · " connectors; split them
+    # back apart, then merge consecutive parts of the same role into a line.
+    parts = [[]]
+    for seg in segments:
+        if seg == (" · ", "plain"):
+            parts.append([])
+        else:
+            parts[-1].append(seg)
+
+    def role_of(part):
+        return next((role for _, role in reversed(part) if role != "plain"), "plain")
+
+    grouped = []   # [(role, [part, ...])]
+    for part in parts:
+        role = role_of(part)
+        if grouped and grouped[-1][0] == role:
+            grouped[-1][1].append(part)
+        else:
+            grouped.append((role, [part]))
+
+    def span(text, role):
         color = theme.ROLE.get(role, theme.INK)
-        parts.append(f'<span style="color:{color}">{html.escape(text)}</span>')
-    return "".join(parts)
+        return f'<span style="color:{color}">{html.escape(text)}</span>'
+
+    sep = f'<span style="color:{theme.MUTED}"> · </span>'
+    lines = [sep.join("".join(span(t, r) for t, r in part) for part in group)
+             for _, group in grouped]
+    return "<br>".join(lines)
 
 
 class _RichTextDelegate(QStyledItemDelegate):
-    """Paints a cell's UserRole HTML so one line can mix colours."""
+    """Paints a cell's UserRole HTML so lines can mix colours; rows grow to
+    fit multi-line summaries, wrapping within the column width."""
+
+    PAD_X = 4
+    PAD_Y = 5
+
+    def _doc(self, option, index, width):
+        doc = QTextDocument()
+        doc.setDefaultFont(option.font)
+        doc.setDocumentMargin(0)
+        doc.setHtml(index.data(Qt.ItemDataRole.UserRole) or "")
+        if width > 0:
+            doc.setTextWidth(width)
+        return doc
 
     def paint(self, painter, option, index):
-        html_text = index.data(Qt.ItemDataRole.UserRole)
-        if not html_text:
+        if not index.data(Qt.ItemDataRole.UserRole):
             super().paint(painter, option, index)
             return
         if option.state & QStyle.StateFlag.State_Selected:
             painter.fillRect(option.rect, QColor(theme.ACCENT_SOFT))
-        doc = QTextDocument()
-        doc.setDefaultFont(option.font)
-        doc.setHtml(html_text)
+        doc = self._doc(option, index, option.rect.width() - 2 * self.PAD_X)
         painter.save()
         # Left padding matches the plain columns; vertically centred.
-        y = option.rect.y() + (option.rect.height() - doc.size().height()) / 2
-        painter.translate(option.rect.x() + 4, y)
-        painter.setClipRect(0, 0, option.rect.width() - 4, option.rect.height())
+        y = option.rect.y() + max((option.rect.height() - doc.size().height()) / 2, 0)
+        painter.translate(option.rect.x() + self.PAD_X, y)
+        painter.setClipRect(0, 0, option.rect.width() - self.PAD_X,
+                            option.rect.height())
         doc.drawContents(painter)
         painter.restore()
 
     def sizeHint(self, option, index):
-        size = super().sizeHint(option, index)
-        return QSize(size.width(), max(size.height(), _ROW_H))
+        view = self.parent()
+        width = view.columnWidth(index.column()) if isinstance(view, QTreeWidget) else 260
+        doc = self._doc(option, index, max(width - 2 * self.PAD_X, 50))
+        return QSize(int(doc.idealWidth()) + 2 * self.PAD_X,
+                     max(int(doc.size().height()) + 2 * self.PAD_Y, _ROW_H))
 
 
 class RulesTable(QTreeWidget):
@@ -63,7 +102,6 @@ class RulesTable(QTreeWidget):
         self.setColumnCount(3)
         self.setHeaderLabels(["RULE NAME", "MATCHES WHEN", "FOLDER"])
         self.setRootIsDecorated(False)
-        self.setUniformRowHeights(True)
         # Name and folder track their content; the summary takes what's left,
         # so the folder column never truncates at the default panel width.
         self.setColumnWidth(0, 150)
@@ -72,6 +110,9 @@ class RulesTable(QTreeWidget):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.setItemDelegateForColumn(1, _RichTextDelegate(self))
+        # Multi-line summaries mean per-row heights; recompute them when the
+        # summary column changes width (e.g. the splitter or window resizes).
+        header.sectionResized.connect(lambda *_: self.scheduleDelayedItemsLayout())
         self.setDragEnabled(True)
 
     # --- data -------------------------------------------------------------

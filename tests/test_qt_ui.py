@@ -142,6 +142,23 @@ class TestRulesTable(unittest.TestCase):
         html = segments_to_html([("<b>x</b>", "or")])
         self.assertIn("&lt;b&gt;x&lt;/b&gt;", html)
 
+    def test_segments_group_into_role_lines(self):
+        from src import matching
+        rule = {"match": {"any": ["invoice", "receipt"], "all": ["acme", "ltd"],
+                          "none": ["quote", "draft"]}}
+        html = segments_to_html(matching.describe_match_segments("k", rule))
+        # One line per role: or-terms, then all and-terms, then all not-terms.
+        self.assertEqual(html.count("<br>"), 2)
+        and_line = html.split("<br>")[1]
+        self.assertIn("acme", and_line)
+        self.assertIn("ltd", and_line)
+
+    def test_simple_rule_stays_one_line(self):
+        from src import matching
+        html = segments_to_html(matching.describe_match_segments(
+            "invoice|receipt", {"name": "Inv", "dest": "Invoices"}))
+        self.assertNotIn("<br>", html)
+
 
 class TestPatternDestDialog(unittest.TestCase):
     def test_simple_rule_builds_phrase_only(self):
