@@ -24,6 +24,7 @@ class TemplateTree(QTreeWidget):
         self.template_dir = template_dir
         self.setAcceptDrops(True)
         self.setDropIndicatorShown(True)
+        self._pre_drag_item = None   # selection to restore after a drag highlight
         self.populate()
 
     # --- population -------------------------------------------------------
@@ -113,14 +114,24 @@ class TemplateTree(QTreeWidget):
 
     def dragEnterEvent(self, event):
         if self._drop_kind(event.mimeData()):
+            self._pre_drag_item = self.currentItem()
             event.acceptProposedAction()
 
     def dragMoveEvent(self, event):
         if self._drop_kind(event.mimeData()):
-            # Track the row under the cursor so the target folder is visible.
+            # Highlight the row under the cursor so the target folder is
+            # visible; the original selection is restored when the drag ends.
             item = self.itemAt(event.position().toPoint())
             self.setCurrentItem(item)
             event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event):
+        self._restore_selection()
+        super().dragLeaveEvent(event)
+
+    def _restore_selection(self):
+        self.setCurrentItem(self._pre_drag_item)
+        self._pre_drag_item = None
 
     def dropEvent(self, event):
         kind = self._drop_kind(event.mimeData())
@@ -128,6 +139,7 @@ class TemplateTree(QTreeWidget):
             phrase = bytes(event.mimeData().data(RULE_MIME)).decode("utf-8")
             item = self.itemAt(event.position().toPoint())
             rel_path = item.data(0, Qt.ItemDataRole.UserRole) if item else "."
+            self._restore_selection()
             self.ruleDropped.emit(phrase, rel_path)
             event.acceptProposedAction()
         elif kind == "folders":
@@ -135,6 +147,7 @@ class TemplateTree(QTreeWidget):
                 path = url.toLocalFile()
                 if os.path.isdir(path):
                     self._copy_folder_structure_only(path, self.template_dir)
+            self._pre_drag_item = None   # repopulating deletes the old items
             self.populate()
             QMessageBox.information(self, "Folders Added",
                                     "Folder structure added to template directory.")
