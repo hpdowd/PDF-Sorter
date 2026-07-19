@@ -43,6 +43,7 @@ def build_installer():
         "--hidden-import=tkinter",
         "--hidden-import=urllib.request",
         "--hidden-import=winreg",
+        "--hidden-import=certifi",
         "--clean",
         "--noconfirm",
     ]
