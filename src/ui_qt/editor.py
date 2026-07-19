@@ -100,6 +100,7 @@ class MappingEditor(QWidget):
         self.rules_table.setToolTip(
             "Phrases and their destination folders. Drag a phrase onto a folder to assign.")
         self.rules_table.itemDoubleClicked.connect(lambda *_: self.on_edit_rule())
+        self.rules_table.ruleMoved.connect(self.on_rule_reordered)
         self.rules_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.rules_table.customContextMenuRequested.connect(self._show_rules_menu)
         left_lay.addWidget(self.rules_table, 1)
@@ -462,6 +463,13 @@ class MappingEditor(QWidget):
         if self.logic.move_rule(phrase, direction):
             self.refresh_mapping_table()
             # Reselect the item after refresh (its key is unchanged).
+            self.rules_table.select_phrase(phrase)
+            self.set_dirty(True)
+
+    def on_rule_reordered(self, phrase, row):
+        """A rule was dropped back into the list: move it to that position."""
+        if self.logic.reorder_rule(phrase, row):
+            self.refresh_mapping_table()
             self.rules_table.select_phrase(phrase)
             self.set_dirty(True)
 

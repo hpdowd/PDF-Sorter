@@ -61,6 +61,25 @@ class TestEditorLogic(unittest.TestCase):
         # Order is match priority; editing must not demote the rule.
         self.assertEqual(list(logic.mappings).index("renamed"), 1)
 
+    def test_reorder_rule_moves_to_drop_row(self):
+        logic = EditorLogic()
+        logic.mappings = dict(BASE)          # invoice, receipt, report
+        # Drop "invoice" below "report" (drop-row 3, counted pre-removal).
+        self.assertTrue(logic.reorder_rule("invoice", 3))
+        self.assertEqual(list(logic.mappings), ["receipt", "report", "invoice"])
+        # Drop "invoice" back to the top.
+        self.assertTrue(logic.reorder_rule("invoice", 0))
+        self.assertEqual(list(logic.mappings), ["invoice", "receipt", "report"])
+
+    def test_reorder_rule_noop_drop_is_not_dirty(self):
+        logic = EditorLogic()
+        logic.mappings = dict(BASE)
+        # Dropping a rule just above or below itself changes nothing.
+        self.assertFalse(logic.reorder_rule("receipt", 1))
+        self.assertFalse(logic.reorder_rule("receipt", 2))
+        self.assertFalse(logic.is_dirty)
+        self.assertEqual(list(logic.mappings), ["invoice", "receipt", "report"])
+
     def test_update_rule_can_drop_match_block(self):
         logic = EditorLogic()
         logic.add_rule("p", "N", "D", {"any": ["p"], "all": ["x"], "none": []})

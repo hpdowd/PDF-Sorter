@@ -5,13 +5,14 @@ terms are coloured by role (any=blue, all=green, none=red — Variant A), and th
 destination folder. The colouring uses a rich-text item delegate, which is why
 this is a plain QTreeWidget rather than the Canvas workaround tkinter needed.
 
-Rows are keyed by the rule's phrase key and are draggable onto the template
-tree to assign a destination.
+Rows are keyed by the rule's phrase key and are draggable two ways: onto the
+template tree to assign a destination, and within the table to reorder (order
+is match priority — the first matching rule wins).
 """
 import html
 
-from PySide6.QtCore import QMimeData, QSize, Qt
-from PySide6.QtGui import QColor, QDrag, QPainter, QTextDocument
+from PySide6.QtCore import QMimeData, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QDrag, QPainter, QPen, QTextDocument
 from PySide6.QtWidgets import (QHeaderView, QStyle, QStyledItemDelegate,
                                QTreeWidget, QTreeWidgetItem)
 
@@ -97,8 +98,11 @@ class _RichTextDelegate(QStyledItemDelegate):
 
 
 class RulesTable(QTreeWidget):
+    ruleMoved = Signal(str, int)   # phrase, drop-row index (pre-removal count)
+
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._drop_row = None
         self.setColumnCount(3)
         self.setHeaderLabels(["RULE NAME", "MATCHES WHEN", "FOLDER"])
         self.setRootIsDecorated(False)
@@ -114,6 +118,7 @@ class RulesTable(QTreeWidget):
         # summary column changes width (e.g. the splitter or window resizes).
         header.sectionResized.connect(lambda *_: self.scheduleDelayedItemsLayout())
         self.setDragEnabled(True)
+        self.setAcceptDrops(True)
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -122,6 +127,15 @@ class RulesTable(QTreeWidget):
             painter.setPen(QColor("#9aa4ae"))
             painter.drawText(self.viewport().rect(), Qt.AlignmentFlag.AlignCenter,
                              "No rules yet — click Add to create one")
+        if self._drop_row is not None:
+            if self._drop_row < self.topLevelItemCount():
+                y = self.visualItemRect(self.topLevelItem(self._drop_row)).top()
+            else:
+                y = self.visualItemRect(
+                    self.topLevelItem(self.topLevelItemCount() - 1)).bottom()
+            painter = QPainter(self.viewport())
+            painter.setPen(QPen(QColor(theme.ACCENT), 2))
+            painter.drawLine(0, y, self.viewport().width(), y)
 
     # --- data -------------------------------------------------------------
 
@@ -165,3 +179,51 @@ class RulesTable(QTreeWidget):
         drag = QDrag(self)
         drag.setMimeData(mime)
         drag.exec(Qt.DropAction.MoveAction | Qt.DropAction.CopyAction)
+        # The drag may end outside the table (e.g. on the template tree).
+        self._drop_row = None
+        self.viewport().update()
+
+    # --- drop target (reorder by dropping a rule back into the list)
+
+    def _row_for_pos(self, pos):
+        """The drop-row index for a viewport position: before the row under
+        the cursor's top half, after it for the bottom half, end when below."""
+        item = self.itemAt(pos)
+        if item is None:
+            return self.topLevelItemCount()
+        row = self.indexOfTopLevelItem(item)
+        if pos.y() > self.visualItemRect(item).center().y():
+            row += 1
+        return row
+
+    def _is_own_rule_drag(self, event):
+        return event.source() is self and event.mimeData().hasFormat(RULE_MIME)
+
+    def dragEnterEvent(self, event):
+        if self._is_own_rule_drag(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if self._is_own_rule_drag(event):
+            self._drop_row = self._row_for_pos(event.position().toPoint())
+            self.viewport().update()
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._drop_row = None
+        self.viewport().update()
+
+    def dropEvent(self, event):
+        if not self._is_own_rule_drag(event):
+            event.ignore()
+            return
+        row = self._row_for_pos(event.position().toPoint())
+        self._drop_row = None
+        self.viewport().update()
+        phrase = bytes(event.mimeData().data(RULE_MIME)).decode("utf-8")
+        event.acceptProposedAction()
+        self.ruleMoved.emit(phrase, row)

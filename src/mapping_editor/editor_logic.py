@@ -132,6 +132,25 @@ class EditorLogic:
         self.is_dirty = True
         return True
 
+    def reorder_rule(self, phrase, new_index):
+        """Moves a rule to a specific position (a drop-row index as counted
+        before the rule is lifted out). False if nothing actually moved."""
+        keys = list(self.mappings.keys())
+        try:
+            old_index = keys.index(phrase)
+        except ValueError:
+            return False
+        keys.pop(old_index)
+        if new_index > old_index:
+            new_index -= 1
+        new_index = max(0, min(new_index, len(keys)))
+        if new_index == old_index:
+            return False
+        keys.insert(new_index, phrase)
+        self.mappings = {k: self.mappings[k] for k in keys}
+        self.is_dirty = True
+        return True
+
     def rename_template_folder(self, old_rel_path, new_folder_name):
         """Renames a folder in the template directory and updates mappings."""
         old_abs_path = os.path.join(self.template_dir, old_rel_path)
