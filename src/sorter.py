@@ -46,11 +46,35 @@ except ImportError:
     OCR_AVAILABLE = False
 
 
+def _find_tesseract():
+    """The tesseract binary: PATH first, then the standard Windows install
+    locations — the per-user one before the machine-wide ones — so the app
+    works without any PATH setup or admin access."""
+    found = shutil.which("tesseract")
+    if found:
+        return found
+    bases = [os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs"),
+             os.environ.get("PROGRAMFILES", r"C:\Program Files"),
+             os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")]
+    for base in bases:
+        candidate = os.path.join(base, "Tesseract-OCR", "tesseract.exe")
+        if base and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+if OCR_AVAILABLE:
+    _tesseract_cmd = _find_tesseract()
+    if _tesseract_cmd:
+        pytesseract.pytesseract.tesseract_cmd = _tesseract_cmd
+
+
 def ocr_status():
     """Return (available, detail): whether OCR can actually run, plus a short note.
 
     OCR needs both the Python libraries (Pillow/pytesseract) *and* the Tesseract
-    binary on PATH. pytesseract only fails at call time when the binary is
+    binary, which is searched for at import time (PATH, then the standard
+    install folders). pytesseract only fails at call time when the binary is
     missing, so probe it here for a definitive answer at startup.
     """
     if not OCR_AVAILABLE:
@@ -59,7 +83,7 @@ def ocr_status():
         version = pytesseract.get_tesseract_version()
         return True, f"Tesseract {version}"
     except Exception:
-        return False, "Tesseract OCR is not installed or not on PATH."
+        return False, "Tesseract OCR is not installed."
 
 class Sorter:
     def __init__(self, mapping_path, output_dir=None, progress_callback=None, status_callback=None):

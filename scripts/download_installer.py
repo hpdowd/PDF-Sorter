@@ -45,7 +45,10 @@ class DownloadBasedInstaller:
     def __init__(self):
         # Default installation to a more user-friendly location
         self.install_dir = Path.home() / "AppData" / "Local" / "Programs"
-        self.tesseract_url = "https://github.com/UB-Mannheim/tesseract/releases/download/v5.3.3.20231005/tesseract-ocr-w64-setup-5.3.3.20231005.exe"
+        # Static fallback only; get_tesseract_url() asks the UB-Mannheim
+        # releases API for the current installer first (pinned URLs rot —
+        # the 5.3.3 asset this used to point at is now a 404).
+        self.tesseract_url = "https://github.com/UB-Mannheim/tesseract/releases/download/v5.4.0.20240606/tesseract-ocr-w64-setup-5.4.0.20240606.exe"
         
         # Configuration for download URLs
         self.app_config = {
@@ -201,12 +204,16 @@ class DownloadBasedInstaller:
             
             # Create desktop shortcut
             self.create_desktop_shortcut()
-            
+
+            # Optional Tesseract OCR download (only needed for scanned PDFs)
+            if getattr(self, "tesseract_var", None) and self.tesseract_var.get():
+                self.install_tesseract()
+
             if self.status_var:
                 self.status_var.set("Installation completed successfully!")
             if self.progress_var:
                 self.progress_var.set(100)
-            
+
             return True
             
         except Exception as e:
@@ -214,6 +221,49 @@ class DownloadBasedInstaller:
                 self.status_var.set(f"Installation failed: {e}")
             return False
     
+    def get_tesseract_url(self):
+        """The current UB-Mannheim Windows installer, via their releases API;
+        falls back to the pinned URL if the API is unreachable."""
+        try:
+            api_url = "https://api.github.com/repos/UB-Mannheim/tesseract/releases/latest"
+            with urllib.request.urlopen(api_url, timeout=30,
+                                        context=make_ssl_context()) as response:
+                release_data = json.loads(response.read().decode())
+            for asset in release_data.get("assets", []):
+                if asset["name"].startswith("tesseract-ocr-w64-setup") \
+                        and asset["name"].endswith(".exe"):
+                    return asset["browser_download_url"]
+        except Exception as e:
+            print(f"Tesseract release lookup failed: {e}")
+        return self.tesseract_url
+
+    def install_tesseract(self):
+        """Download the Tesseract installer and run it interactively.
+
+        Deliberately not silent: run interactively so the user can pick
+        "Install just for me", which needs no admin access (silent NSIS
+        installs default to the all-users mode, which elevates). The app
+        finds the per-user install location by itself, so no PATH setup is
+        involved either way.
+        """
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".exe", delete=False) as f:
+                temp_exe = f.name
+            if not self.download_with_progress(self.get_tesseract_url(), temp_exe,
+                                               "Downloading Tesseract OCR"):
+                return False
+            if self.status_var:
+                self.status_var.set(
+                    'Tesseract setup: choose "Install just for me" — no admin needed')
+            subprocess.run([temp_exe])
+            os.unlink(temp_exe)
+            return True
+        except Exception as e:
+            # OCR is optional: never fail the app install over it.
+            if self.status_var:
+                self.status_var.set(f"Tesseract install skipped: {e}")
+            return False
+
     def create_zip_for_download(self, app_directory, output_zip):
         """Helper method to create a zip file from the built application directory."""
         
@@ -302,7 +352,7 @@ start "" "{exe_path}"
         """Create the installer GUI."""
         self.root = tk.Tk()
         self.root.title("OCR File Sorter Installer")
-        self.root.geometry("500x420")
+        self.root.geometry("500x460")
         self.root.resizable(False, False)
         
         # Configure style
@@ -321,10 +371,10 @@ start "" "{exe_path}"
         # Description
         desc_text = """This installer will download and set up OCR File Sorter:
 
-• Downloads latest OCR File Sorter application
-• Installs Tesseract OCR engine (user-specific)
-• Creates desktop shortcuts and file associations
-• Configures user PATH
+• Downloads the latest OCR File Sorter application
+• Optionally downloads Tesseract OCR (for scanned PDFs)
+• Creates a desktop shortcut
+• Everything installs per-user — no admin access needed
 
 Installation Directory:"""
         
@@ -345,10 +395,18 @@ Installation Directory:"""
         browse_btn.grid(row=0, column=1)
         
         dir_frame.columnconfigure(0, weight=1)
-        
+
+        # Optional Tesseract download (the app works without it; OCR of
+        # scanned/image PDFs is what needs it)
+        self.tesseract_var = tk.BooleanVar(value=True)
+        tesseract_check = ttk.Checkbutton(
+            main_frame, variable=self.tesseract_var,
+            text="Also download Tesseract OCR (only needed for scanned PDFs)")
+        tesseract_check.grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(0, 15))
+
         # Progress section
         progress_frame = ttk.LabelFrame(main_frame, text="Installation Progress", padding="10")
-        progress_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 20))
+        progress_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 20))
         
         self.progress_var = tk.IntVar()
         progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var, maximum=100)
@@ -363,7 +421,7 @@ Installation Directory:"""
         
         # Buttons
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=4, column=0, columnspan=2, pady=(20, 0))
+        button_frame.grid(row=5, column=0, columnspan=2, pady=(20, 0))
         
         install_btn = ttk.Button(button_frame, text="Install", command=self.start_installation,
                                 style='Accent.TButton')

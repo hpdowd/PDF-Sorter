@@ -6,8 +6,33 @@ import tempfile
 import unittest
 from datetime import date
 
-from src.sorter import Sorter, ocr_status
+from unittest.mock import patch
+
+from src import sorter as sorter_mod
 from src import utils
+from src.sorter import Sorter, ocr_status
+
+
+class TestFindTesseract(unittest.TestCase):
+    def test_path_hit_wins(self):
+        with patch("src.sorter.shutil.which", return_value="/usr/bin/tesseract"):
+            self.assertEqual(sorter_mod._find_tesseract(), "/usr/bin/tesseract")
+
+    def test_falls_back_to_per_user_install_dir(self):
+        tmp = tempfile.mkdtemp()
+        exe = os.path.join(tmp, "Programs", "Tesseract-OCR", "tesseract.exe")
+        os.makedirs(os.path.dirname(exe))
+        open(exe, "w").close()
+        with patch("src.sorter.shutil.which", return_value=None), \
+             patch.dict(os.environ, {"LOCALAPPDATA": tmp}):
+            self.assertEqual(sorter_mod._find_tesseract(), exe)
+        shutil.rmtree(tmp)
+
+    def test_nothing_found_returns_none(self):
+        with patch("src.sorter.shutil.which", return_value=None), \
+             patch.dict(os.environ, {"LOCALAPPDATA": "", "PROGRAMFILES": "",
+                                     "PROGRAMFILES(X86)": ""}):
+            self.assertIsNone(sorter_mod._find_tesseract())
 
 
 def make_sorter(mapping_data, template_dir):
