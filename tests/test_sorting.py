@@ -19,6 +19,7 @@ def make_sorter(mapping_data, template_dir):
     s.template_dir = template_dir
     s.mapping_data = mapping_data
     s.naming_scheme = (mapping_data.get("_config") or {}).get("naming_scheme") or None
+    s.foldering = (mapping_data.get("_config") or {}).get("foldering") or {}
     s._cancelled = False
     return s
 
@@ -328,6 +329,52 @@ class TestDestExpansion(unittest.TestCase):
         try:
             os.utime(path, (0, 0))
             self.assertEqual(s._document_date(path, "no date here"), date.fromtimestamp(0))
+        finally:
+            os.remove(path)
+
+
+class TestFoldering(unittest.TestCase):
+    def _sorter(self, foldering):
+        data = {"_config": {"foldering": foldering}, "x": {"name": "X", "dest": "Y"}}
+        return Sorter.from_mapping_data(data)
+
+    def test_no_foldering_returns_base(self):
+        s = self._sorter({})
+        self.assertEqual(s._resolve_dest("Billing", "/f.pdf", "invoice 2024-03-01"), "Billing")
+
+    def test_group_year_month(self):
+        s = self._sorter({"by": "date", "group": "year_month", "date_source": "content"})
+        self.assertEqual(s._resolve_dest("Statements", "/f.pdf", "dated 2024-03-01"),
+                         "Statements/2024/03")
+
+    def test_group_year_only(self):
+        s = self._sorter({"by": "date", "group": "year", "date_source": "content"})
+        self.assertEqual(s._resolve_dest("Statements", "/f.pdf", "dated 2024-03-01"),
+                         "Statements/2024")
+
+    def test_group_quarter(self):
+        s = self._sorter({"by": "date", "group": "quarter", "date_source": "content"})
+        self.assertEqual(s._resolve_dest("Statements", "/f.pdf", "dated 2024-03-01"),
+                         "Statements/2024/Q1")
+
+    def test_missing_date_uses_unknown_bucket(self):
+        s = self._sorter({"by": "date", "group": "year_month", "date_source": "content"})
+        self.assertEqual(s._resolve_dest("Statements", "/does/not/exist.pdf", "no date here"),
+                         "Statements/Unknown/Unknown")
+
+    def test_per_rule_token_plus_global_foldering(self):
+        s = self._sorter({"by": "date", "group": "year", "date_source": "content"})
+        self.assertEqual(s._resolve_dest("Statements/{doc_month}", "/f.pdf", "dated 2024-03-01"),
+                         "Statements/03/2024")
+
+    def test_file_modified_source(self):
+        s = self._sorter({"by": "date", "group": "year", "date_source": "file_modified"})
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            path = f.name
+        try:
+            os.utime(path, (0, 0))
+            year = date.fromtimestamp(0).year
+            self.assertEqual(s._resolve_dest("S", path, "dated 2024-03-01"), f"S/{year:04d}")
         finally:
             os.remove(path)
 

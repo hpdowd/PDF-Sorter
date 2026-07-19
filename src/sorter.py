@@ -15,6 +15,13 @@ logger = logging.getLogger("ocr_file_sorter.sorter")
 # Safety cap on how deep a token-expanded destination path may nest.
 _MAX_DEST_DEPTH = 8
 
+# How a "Group by" foldering choice maps to destination-path date tokens.
+_GROUP_TOKENS = {
+    "year": "{doc_year}",
+    "quarter": "{doc_year}/{doc_quarter}",
+    "year_month": "{doc_year}/{doc_month}",
+}
+
 
 @dataclass
 class PlanItem:
@@ -61,8 +68,9 @@ class Sorter:
         self.status_callback = status_callback
         self._cancelled = False
         self.mapping_data = self.load_mapping()
-        # Optional filename scheme, defined in the mapping under "_config".
+        # Optional filename scheme and subfolder foldering, under "_config".
         self.naming_scheme = (self.mapping_data.get("_config") or {}).get("naming_scheme") or None
+        self.foldering = (self.mapping_data.get("_config") or {}).get("foldering") or {}
         self._validate_mapping()
         # Destination root for sorted files. When the caller supplies an output
         # directory (the GUI's "Output folder" picker), sort into it. Otherwise
@@ -90,6 +98,7 @@ class Sorter:
         s.template_dir = template_dir
         s.mapping_data = mapping_data or {}
         s.naming_scheme = (s.mapping_data.get("_config") or {}).get("naming_scheme") or None
+        s.foldering = (s.mapping_data.get("_config") or {}).get("foldering") or {}
         s._cancelled = False
         return s
 
@@ -325,26 +334,52 @@ class Sorter:
             new_name += ext
         return new_name
 
-    def _document_date(self, file_path, text):
-        """Best-effort date for a document, content-first with a mtime fallback.
-
-        Content wins because a date printed in the document is more trustworthy
-        than the file's timestamp (and than embedded PDF metadata, which is often
-        wrong after emailing/re-saving). Falls back to the file's modified time so
-        a date-foldered file is never left without a bucket. A date-source
-        preference (UI) will parameterize this order later.
-        """
-        found = dates.extract_date(text) if text else None
-        if found:
-            return found
+    def _mtime_date(self, file_path):
         try:
             return date.fromtimestamp(os.path.getmtime(file_path))
         except OSError:
             return None
 
-    def _date_context(self, file_path, text):
+    def _pdf_metadata_date(self, file_path):
+        """Date embedded in the PDF (creation, else modification). Often wrong
+        after emailing/re-saving — offered but not the default."""
+        try:
+            with fitz.open(file_path) as doc:
+                meta = doc.metadata or {}
+        except Exception:
+            return None
+        raw = meta.get("creationDate") or meta.get("modDate") or ""
+        m = re.search(r"(\d{4})(\d{2})(\d{2})", raw)
+        if not m:
+            return None
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            return None
+
+    def _document_date(self, file_path, text, source="content"):
+        """Best-effort date for a document from the chosen source, always with a
+        fallback so a date-foldered file is never left without a bucket.
+
+        Content is the default because a date printed in the document is more
+        trustworthy than the file's timestamp or embedded PDF metadata (the same
+        reason filename renaming derives names from content).
+        """
+        if source == "file_modified":
+            return self._mtime_date(file_path)
+        if source == "pdf_metadata":
+            found = self._pdf_metadata_date(file_path)
+            if found:
+                return found
+            # fall through to content, then mtime
+        found = dates.extract_date(text) if text else None
+        if found:
+            return found
+        return self._mtime_date(file_path)
+
+    def _date_context(self, file_path, text, source="content"):
         """Build the date tokens available to destination expansion for one file."""
-        doc_date = self._document_date(file_path, text)
+        doc_date = self._document_date(file_path, text, source)
         if not doc_date:
             return {}
         return {
@@ -352,6 +387,29 @@ class Sorter:
             "doc_month": f"{doc_date.month:02d}",
             "doc_quarter": f"Q{(doc_date.month - 1) // 3 + 1}",
         }
+
+    def _foldering_template(self):
+        """The date-token subpath appended to every destination by the mapping's
+        global foldering setting, or "" when foldering is off."""
+        if (self.foldering.get("by") or "none") != "date":
+            return ""
+        return _GROUP_TOKENS.get(self.foldering.get("group") or "year_month",
+                                 _GROUP_TOKENS["year_month"])
+
+    def _resolve_dest(self, base_dest, file_path, text):
+        """Resolve a rule's destination for one file: expand any per-rule date
+        tokens, then append the mapping's global date-foldering subpath. Returns
+        ``base_dest`` unchanged when neither applies (existing mappings)."""
+        template = self._foldering_template()
+        if not template and not (base_dest and "{" in base_dest):
+            return base_dest
+        source = self.foldering.get("date_source") or "content"
+        context = self._date_context(file_path, text, source)
+        dest = self._expand_dest(base_dest, context) if base_dest and "{" in base_dest else base_dest
+        if template:
+            suffix = self._expand_dest(template, context)
+            dest = f"{dest}/{suffix}" if dest else suffix
+        return dest
 
     def _expand_dest(self, dest, context):
         """Expand ``{tokens}`` in a rule's destination path using a per-file
@@ -421,10 +479,9 @@ class Sorter:
                     match = self.find_matching_rule(text)
                     if match:
                         phrase, rule, dest = match
-                        # Resolve any {date} tokens in the destination now, so the
-                        # preview shows the real folder (e.g. Statements/2024/03).
-                        if dest and "{" in dest:
-                            dest = self._expand_dest(dest, self._date_context(file_path, text))
+                        # Resolve per-rule tokens + global date foldering now, so
+                        # the preview shows the real folder (e.g. Statements/2024/03).
+                        dest = self._resolve_dest(dest, file_path, text)
                         items.append(PlanItem(
                             file_path, "matched", phrase=phrase, dest=dest,
                             dest_name=self._apply_naming(rule, phrase, file_path)))
