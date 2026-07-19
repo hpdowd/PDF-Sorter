@@ -11,7 +11,7 @@ tree to assign a destination.
 import html
 
 from PySide6.QtCore import QMimeData, QSize, Qt
-from PySide6.QtGui import QColor, QDrag, QTextDocument
+from PySide6.QtGui import QColor, QDrag, QPainter, QTextDocument
 from PySide6.QtWidgets import (QHeaderView, QStyle, QStyledItemDelegate,
                                QTreeWidget, QTreeWidgetItem)
 
@@ -114,6 +114,14 @@ class RulesTable(QTreeWidget):
         # summary column changes width (e.g. the splitter or window resizes).
         header.sectionResized.connect(lambda *_: self.scheduleDelayedItemsLayout())
         self.setDragEnabled(True)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.topLevelItemCount() == 0:
+            painter = QPainter(self.viewport())
+            painter.setPen(QColor("#9aa4ae"))
+            painter.drawText(self.viewport().rect(), Qt.AlignmentFlag.AlignCenter,
+                             "No rules yet — click Add to create one")
 
     # --- data -------------------------------------------------------------
 
