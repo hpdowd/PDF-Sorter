@@ -78,6 +78,7 @@ class MainWindow(QMainWindow):
     executeDone = Signal(str)               # summary text
     sortCancelled = Signal()
     undoDone = Signal(int, int)             # (undone, errors)
+    ocrStatusReady = Signal(bool, str)      # (available, detail)
 
     def __init__(self):
         super().__init__()
@@ -212,7 +213,15 @@ class MainWindow(QMainWindow):
         dismiss.clicked.connect(self._dismiss_ocr_warning)
         warn_row.addWidget(dismiss, 0, Qt.AlignmentFlag.AlignTop)
         outer.addWidget(self.ocr_warning)
-        self._update_ocr_indicator()
+        # Probing tesseract spawns a process — slow enough on Windows to
+        # freeze the window — so warm sorter's cache off the GUI thread; the
+        # banner appears when the answer arrives, and every later ocr_status()
+        # call (e.g. the About box) is instant.
+        self.ocr_warning.hide()
+        self.ocrStatusReady.connect(self._apply_ocr_status)
+        threading.Thread(
+            target=lambda: self.ocrStatusReady.emit(*sorter.ocr_status()),
+            daemon=True).start()
 
         # --- Status bar ---
         status_row = QHBoxLayout()
@@ -502,10 +511,9 @@ class MainWindow(QMainWindow):
         self._refresh_undo_state()
         self.status_label.setText("Cancelled")
 
-    def _update_ocr_indicator(self):
+    def _apply_ocr_status(self, available, detail):
         """Show a persistent warning when OCR (Tesseract) can't run, hide it
         otherwise — or permanently once the user has dismissed it."""
-        available, detail = sorter.ocr_status()
         if available or self.settings.get(HIDE_OCR_WARNING_KEY, False):
             self.ocr_warning.hide()
         else:

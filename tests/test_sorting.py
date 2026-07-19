@@ -40,6 +40,15 @@ class TestOcrStatus(unittest.TestCase):
     """ocr_status probes tesseract itself (quietly); pytesseract may be absent
     on this machine, so stub it."""
 
+    def setUp(self):
+        sorter_mod._ocr_status_cache = None
+
+    def test_returns_bool_and_nonempty_detail(self):
+        available, detail = ocr_status()
+        self.assertIsInstance(available, bool)
+        self.assertIsInstance(detail, str)
+        self.assertTrue(detail)
+
     def _with_stub(self, run_result=None, run_error=None):
         stub = type("P", (), {})()
         stub.pytesseract = type("PP", (), {"tesseract_cmd": "tesseract"})()
@@ -63,6 +72,16 @@ class TestOcrStatus(unittest.TestCase):
             available, detail = ocr_status()
         self.assertFalse(available)
         self.assertIn("not installed", detail)
+
+    def test_result_is_cached_until_refresh(self):
+        result = subprocess_result("tesseract 5.4.0\n")
+        stub_ctx, run_ctx = self._with_stub(run_result=result)
+        with stub_ctx, run_ctx as run:
+            ocr_status()
+            ocr_status()                      # cached: no second probe
+            self.assertEqual(run.call_count, 1)
+            ocr_status(refresh=True)          # explicit re-probe
+            self.assertEqual(run.call_count, 2)
 
     def test_windows_probe_suppresses_console_window(self):
         result = subprocess_result("tesseract 5.4.0\n")
@@ -569,14 +588,6 @@ class TestCancellation(unittest.TestCase):
         self.s.cancel()
         manifest, count = self.s.execute(plan)
         self.assertEqual((count, manifest), (0, []))
-
-
-class TestOcrStatus(unittest.TestCase):
-    def test_returns_bool_and_nonempty_detail(self):
-        available, detail = ocr_status()
-        self.assertIsInstance(available, bool)
-        self.assertIsInstance(detail, str)
-        self.assertTrue(detail)
 
 
 if __name__ == "__main__":
