@@ -63,6 +63,55 @@ class TestChipInput(unittest.TestCase):
         chips._remove("a")
         self.assertEqual(chips.get_terms(), ["b"])
 
+    def test_enter_chains_into_next_word(self):
+        from PySide6.QtCore import QEvent, Qt as QtNS
+        from PySide6.QtGui import QKeyEvent
+        chips = ChipInput(kind="any")
+        chips._begin_add()
+        chips._edit.setText("invoice")
+        event = QKeyEvent(QEvent.Type.KeyPress, QtNS.Key.Key_Return,
+                          QtNS.KeyboardModifier.NoModifier)
+        swallowed = chips.eventFilter(chips._edit, event)
+        # Enter must be swallowed: QLineEdit doesn't consume Return, so a
+        # propagated keypress would fire the dialog's default (OK) button.
+        self.assertTrue(swallowed)
+        self.assertEqual(chips.get_terms(), ["invoice"])
+        self.assertIsNotNone(chips._edit)         # editor reopened for the next word
+
+    def test_empty_field_dissolves(self):
+        chips = ChipInput(kind="any", terms=["invoice"])
+        chips._begin_add()
+        chips.commit_pending()                    # empty: as if never opened
+        self.assertEqual(chips.get_terms(), ["invoice"])
+        self.assertIsNone(chips._edit)
+
+    def test_escape_cancels_without_adding(self):
+        from PySide6.QtCore import QEvent, Qt as QtNS
+        from PySide6.QtGui import QKeyEvent
+        chips = ChipInput(kind="any")
+        chips._begin_add()
+        chips._edit.setText("half-typed")
+        event = QKeyEvent(QEvent.Type.KeyPress, QtNS.Key.Key_Escape,
+                          QtNS.KeyboardModifier.NoModifier)
+        swallowed = chips.eventFilter(chips._edit, event)
+        self.assertTrue(swallowed)                # Esc must not reach the dialog
+        self.assertEqual(chips.get_terms(), [])
+        self.assertIsNone(chips._edit)
+
+    def test_outside_click_commits(self):
+        from PySide6.QtWidgets import QLabel
+        chips = ChipInput(kind="any")
+        outside = QLabel("elsewhere")
+        chips._begin_add()
+        chips._edit.setText("receipt")
+        from PySide6.QtCore import QEvent
+        class _Press(QEvent):
+            def __init__(self):
+                super().__init__(QEvent.Type.MouseButtonPress)
+        chips.eventFilter(outside, _Press())      # app-filter path
+        self.assertEqual(chips.get_terms(), ["receipt"])
+        self.assertIsNone(chips._edit)
+
 
 class TestRulesTable(unittest.TestCase):
     MAPPINGS = {
