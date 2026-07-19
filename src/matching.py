@@ -61,13 +61,13 @@ def resolve_match_spec(phrase_key, rule):
     return {"all": [], "any": alternatives, "none": []}
 
 
-def describe_match(phrase_key, rule):
-    """Return a one-line, plain-language summary of when a rule matches, for the
-    rules list — e.g. ``"invoice or receipt · and acme · not quote"``.
+def describe_match_segments(phrase_key, rule):
+    """Return the rule summary as a list of ``(text, role)`` segments for
+    colour-coded rendering, where ``role`` is ``"or"`` (any term), ``"and"``
+    (all term), ``"not"`` (none term), or ``"plain"`` (connectors).
 
-    Uses the terms as the user typed them (not normalized), so the summary reads
-    back their own words. A simple key-only rule reads as short as today
-    (``"invoice or receipt"``); advanced options append ``and``/``not`` segments.
+    Concatenating the texts yields exactly :func:`describe_match`. Terms are shown
+    as the user typed them; a simple key-only rule reads as short as today.
     """
     match = rule.get("match") if isinstance(rule, dict) else None
     any_terms = all_terms = none_terms = []
@@ -80,15 +80,35 @@ def describe_match(phrase_key, rule):
         any_terms = [part.strip() for part in phrase_key.split("|") if part.strip()]
         all_terms = none_terms = []
 
-    segments = []
+    parts = []  # each part is itself a list of (text, role) segments
     remaining_all = list(all_terms)
     if any_terms:
-        segments.append(" or ".join(any_terms))
+        seg = []
+        for i, term in enumerate(any_terms):
+            if i:
+                seg.append((" or ", "plain"))
+            seg.append((term, "or"))
+        parts.append(seg)
     elif remaining_all:
-        segments.append(remaining_all.pop(0))
-    segments.extend(f"and {term}" for term in remaining_all)
-    segments.extend(f"not {term}" for term in none_terms)
-    return " · ".join(segments) if segments else "(no match terms)"
+        parts.append([(remaining_all.pop(0), "and")])
+    parts.extend([("and ", "plain"), (term, "and")] for term in remaining_all)
+    parts.extend([("not ", "plain"), (term, "not")] for term in none_terms)
+
+    if not parts:
+        return [("(no match terms)", "plain")]
+    out = []
+    for i, part in enumerate(parts):
+        if i:
+            out.append((" · ", "plain"))
+        out.extend(part)
+    return out
+
+
+def describe_match(phrase_key, rule):
+    """One-line, plain-language summary of when a rule matches, e.g.
+    ``"invoice or receipt · and acme · not quote"`` (the plain text of
+    :func:`describe_match_segments`)."""
+    return "".join(text for text, _ in describe_match_segments(phrase_key, rule))
 
 
 def match_rule(normalized_text, spec):

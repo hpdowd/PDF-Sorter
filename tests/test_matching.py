@@ -68,6 +68,26 @@ class TestDescribeMatch(unittest.TestCase):
         self.assertEqual(matching.describe_match("Acme", rule), "acme · and globex")
 
 
+class TestDescribeMatchSegments(unittest.TestCase):
+    def test_segments_join_to_describe_match(self):
+        rule = {"dest": "X", "match": {"any": ["invoice", "receipt"], "all": ["acme"],
+                                       "none": ["quote"]}}
+        segs = matching.describe_match_segments("Acme", rule)
+        self.assertEqual("".join(t for t, _ in segs), matching.describe_match("Acme", rule))
+
+    def test_roles_are_colour_coded(self):
+        rule = {"dest": "X", "match": {"any": ["invoice"], "all": ["acme"], "none": ["quote"]}}
+        roles = {text.strip(): role for text, role in matching.describe_match_segments("R", rule)}
+        self.assertEqual(roles["invoice"], "or")
+        self.assertEqual(roles["acme"], "and")
+        self.assertEqual(roles["quote"], "not")
+
+    def test_simple_key_terms_are_or_role(self):
+        segs = matching.describe_match_segments("invoice|receipt", {"dest": "X"})
+        term_roles = [(t, r) for t, r in segs if t not in (" or ",)]
+        self.assertEqual(term_roles, [("invoice", "or"), ("receipt", "or")])
+
+
 class TestMatchRule(unittest.TestCase):
     def test_any_single_term_present(self):
         matched, which = matching.match_rule("here is an invoice", {"any": ["invoice"]})
