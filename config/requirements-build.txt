@@ -2,6 +2,8 @@
 pyinstaller>=6.0.0
 setuptools>=68.0.0
 pywin32>=306
+# CA roots bundled into the download installer (see scripts/download_installer.py)
+certifi
 
 # Include runtime dependencies
 -r requirements.txt

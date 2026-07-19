@@ -5,6 +5,7 @@ This approach reduces installer size dramatically and enables easier updates.
 """
 
 import os
+import ssl
 import sys
 import subprocess
 import tempfile
@@ -19,6 +20,24 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 import threading
 import time
+
+try:
+    # Bundled CA roots. A fresh Windows install populates its certificate
+    # store lazily, so the frozen installer can hit CERTIFICATE_VERIFY_FAILED
+    # on github.com even though a browser on the same machine works. certifi
+    # makes verification self-contained; PyInstaller picks it up from this
+    # import. The script still runs from source without it (OS store only).
+    import certifi
+except ImportError:
+    certifi = None
+
+
+def make_ssl_context():
+    """The default context (OS certificate store) plus certifi's roots."""
+    context = ssl.create_default_context()
+    if certifi is not None:
+        context.load_verify_locations(cafile=certifi.where())
+    return context
 
 class DownloadBasedInstaller:
     """Installer that downloads the application from a URL."""
@@ -66,7 +85,8 @@ class DownloadBasedInstaller:
                     api_url = f"https://api.github.com/repos/{repo}/releases/tags/{self.app_config['release_tag']}"
                 
                 # Get release info
-                with urllib.request.urlopen(api_url) as response:
+                with urllib.request.urlopen(api_url, timeout=30,
+                                            context=make_ssl_context()) as response:
                     release_data = json.loads(response.read().decode())
                 
                 # Find the app zip in assets
@@ -115,8 +135,21 @@ class DownloadBasedInstaller:
                     self.status_var.set(f"{description} completed")
                 return True
             
-            # Download from web
-            urllib.request.urlretrieve(url, destination, update_progress)
+            # Download from web. Streamed by hand rather than urlretrieve,
+            # which cannot take an SSL context.
+            with urllib.request.urlopen(url, timeout=30,
+                                        context=make_ssl_context()) as response:
+                total_size = int(response.headers.get("Content-Length") or 0)
+                block_size = 64 * 1024
+                with open(destination, "wb") as out:
+                    block_count = 0
+                    while True:
+                        block = response.read(block_size)
+                        if not block:
+                            break
+                        out.write(block)
+                        block_count += 1
+                        update_progress(block_count, block_size, total_size)
             return True
             
         except Exception as e:
