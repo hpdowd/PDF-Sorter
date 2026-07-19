@@ -52,6 +52,15 @@ class TestEditorLogic(unittest.TestCase):
         logic.add_rule("acme invoices", "Acme", "Billing", match)
         self.assertEqual(logic.mappings["acme invoices"]["match"], match)
 
+    def test_update_rule_keeps_position_when_phrase_changes(self):
+        logic = EditorLogic()
+        logic.mappings = dict(BASE)
+        middle = list(logic.mappings)[1]
+        ok, _ = logic.update_rule(middle, "renamed", "N", "D")
+        self.assertTrue(ok)
+        # Order is match priority; editing must not demote the rule.
+        self.assertEqual(list(logic.mappings).index("renamed"), 1)
+
     def test_update_rule_can_drop_match_block(self):
         logic = EditorLogic()
         logic.add_rule("p", "N", "D", {"any": ["p"], "all": ["x"], "none": []})

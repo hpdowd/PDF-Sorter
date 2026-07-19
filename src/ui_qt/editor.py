@@ -428,6 +428,7 @@ class MappingEditor(QWidget):
                                                   dialog.dest, dialog.match)
         if success:
             self.refresh_mapping_table()
+            self.rules_table.select_phrase(dialog.phrase)
             self.set_dirty(True)
         else:
             QMessageBox.warning(self, "Warning", message)

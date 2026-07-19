@@ -83,13 +83,17 @@ class EditorLogic:
         return True, None
 
     def update_rule(self, old_phrase, new_phrase, new_name, new_dest, match=None):
-        """Updates an existing mapping rule."""
+        """Updates an existing mapping rule, keeping its position in the order
+        (order is match priority: the first matching rule wins)."""
         if new_phrase != old_phrase and new_phrase in self.mappings:
             return False, "This phrase or keyword already exists."
-        # Remove old one if phrase changed
-        if old_phrase in self.mappings and new_phrase != old_phrase:
-            del self.mappings[old_phrase]
-        self.mappings[new_phrase] = self._build_rule(new_name, new_dest, match)
+        rule = self._build_rule(new_name, new_dest, match)
+        if old_phrase in self.mappings:
+            self.mappings = {(new_phrase if k == old_phrase else k):
+                             (rule if k == old_phrase else v)
+                             for k, v in self.mappings.items()}
+        else:
+            self.mappings[new_phrase] = rule
         self.is_dirty = True
         return True, None
 
