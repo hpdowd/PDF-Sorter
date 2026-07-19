@@ -12,6 +12,7 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from src import utils, theme
+from src.mapping_editor.chip_input import ChipInput
 
 class BaseDialog(tk.Toplevel):
     """A base class for creating modal dialogs using standard tkinter."""
@@ -155,81 +156,87 @@ class PatternDestDialog(BaseDialog):
     def body(self, master):
         master.grid_columnconfigure(0, weight=1)
 
+        initial_any = self._terms(self.initial_phrase.split("|"))
         initial_all = self._terms(self.initial_match.get("all"))
         initial_none = self._terms(self.initial_match.get("none"))
 
-        ttk.Label(master, text="Rule Name (for easy identification):").pack(anchor="w", pady=(0, 2))
-        self.name_entry = ttk.Entry(master, width=50)
+        ttk.Label(master, text="Rule name (for easy identification):").pack(anchor="w", pady=(0, 2))
+        self.name_entry = ttk.Entry(master, width=52)
         self.name_entry.pack(fill="x", expand=True, pady=(0, 10))
         self.name_entry.insert(0, self.initial_name)
 
-        ttk.Label(master, text="Any of these words or phrases (must be unique):").pack(anchor="w", pady=(0, 2))
-        self.phrase_entry = ttk.Entry(master, width=50)
-        self.phrase_entry.pack(fill="x", expand=True, pady=(0, 2))
-        self.phrase_entry.insert(0, self.initial_phrase)
-        ttk.Label(
-            master,
-            text="Separate alternatives with |  e.g. invoice|receipt  (matches if any appears)",
-            style="Muted.TLabel",
-        ).pack(anchor="w", pady=(0, 10))
+        ttk.Label(master, text="Any of these").pack(anchor="w", pady=(0, 1))
+        self.any_chips = ChipInput(master, kind="any", terms=initial_any)
+        self.any_chips.pack(fill="x", expand=True)
+        ttk.Label(master, text="Matches if the file has at least one of these.",
+                  style="Muted.TLabel").pack(anchor="w", pady=(1, 8))
 
-        ttk.Label(master, text="Destination Folder:").pack(anchor="w", pady=(0, 2))
-        self.dest_combo = ttk.Combobox(master, values=self.destinations, width=47)
-        self.dest_combo.pack(fill="x", expand=True, pady=(0, 10))
+        # --- Advanced matching (progressive disclosure, triangle) ---
+        self.advanced_open = tk.BooleanVar(value=bool(initial_all or initial_none))
+        self.adv_toggle = ttk.Label(master, cursor="hand2", foreground=theme.ACCENT)
+        self.adv_toggle.pack(anchor="w", pady=(2, 0))
+        self.adv_toggle.bind("<Button-1>", lambda e: self._toggle_advanced())
+
+        self.adv_frame = ttk.Frame(master)
+        ttk.Label(self.adv_frame, text="All of these  (must also contain)").pack(anchor="w", pady=(8, 1))
+        self.all_chips = ChipInput(self.adv_frame, kind="all", terms=initial_all)
+        self.all_chips.pack(fill="x", expand=True)
+        ttk.Label(self.adv_frame, text="None of these  (ignore the file if it contains)").pack(anchor="w", pady=(8, 1))
+        self.none_chips = ChipInput(self.adv_frame, kind="none", terms=initial_none)
+        self.none_chips.pack(fill="x", expand=True)
+
+        self.dest_container = ttk.Frame(master)
+        self.dest_container.pack(fill="x", expand=True, pady=(10, 0))
+        ttk.Label(self.dest_container, text="Send to folder:").pack(anchor="w", pady=(0, 2))
+        self.dest_combo = ttk.Combobox(self.dest_container, values=self.destinations, width=49)
+        self.dest_combo.pack(fill="x", expand=True)
         if self.initial_dest:
             self.dest_combo.set(self.initial_dest)
 
-        # --- Advanced matching (progressive disclosure) ---
-        self.advanced_var = tk.BooleanVar(value=bool(initial_all or initial_none))
-        ttk.Checkbutton(master, text="Advanced matching", variable=self.advanced_var,
-                        command=self._toggle_advanced).pack(anchor="w")
-
-        self.adv_frame = ttk.Frame(master)
-        ttk.Label(self.adv_frame, text="All of these (must also contain):").pack(anchor="w", pady=(8, 2))
-        self.all_entry = ttk.Entry(self.adv_frame, width=50)
-        self.all_entry.pack(fill="x", expand=True, pady=(0, 2))
-        self.all_entry.insert(0, " | ".join(initial_all))
-        ttk.Label(self.adv_frame, text="None of these (ignore the file if it contains):").pack(anchor="w", pady=(8, 2))
-        self.none_entry = ttk.Entry(self.adv_frame, width=50)
-        self.none_entry.pack(fill="x", expand=True, pady=(0, 2))
-        self.none_entry.insert(0, " | ".join(initial_none))
-        ttk.Label(self.adv_frame, text="Separate multiple with |", style="Muted.TLabel").pack(anchor="w")
-
-        if self.advanced_var.get():
-            self.adv_frame.pack(fill="x", expand=True, pady=(0, 4))
+        self._render_adv_toggle()
+        if self.advanced_open.get():
+            self.adv_frame.pack(fill="x", expand=True, pady=(4, 0), before=self.dest_container)
 
         return self.name_entry
 
+    def _render_adv_toggle(self):
+        triangle = "▾" if self.advanced_open.get() else "▸"
+        self.adv_toggle.configure(text=f"{triangle} Advanced matching")
+
     def _toggle_advanced(self):
-        if self.advanced_var.get():
-            self.adv_frame.pack(fill="x", expand=True, pady=(0, 4))
-        else:
+        if self.advanced_open.get():
+            self.advanced_open.set(False)
             self.adv_frame.pack_forget()
+        else:
+            self.advanced_open.set(True)
+            self.adv_frame.pack(fill="x", expand=True, pady=(4, 0), before=self.dest_container)
+        self._render_adv_toggle()
 
     def validate(self):
+        for chips in (self.any_chips, self.all_chips, self.none_chips):
+            chips.commit_pending()
         self.name = self.name_entry.get().strip()
-        self.phrase = self.phrase_entry.get().strip()
+        any_terms = self.any_chips.get_terms()
+        all_terms = self.all_chips.get_terms()
+        none_terms = self.none_chips.get_terms()
         self.dest = self.dest_combo.get().strip()
+
         if not self.name:
-            messagebox.showerror("Invalid Name", "Rule Name cannot be empty.", parent=self)
+            messagebox.showerror("Invalid name", "Rule name cannot be empty.", parent=self)
             return False
-        if not self.phrase:
-            messagebox.showerror("Invalid Phrase", "'Any of these' cannot be empty.", parent=self)
+        if not any_terms:
+            messagebox.showerror("No words", "Add at least one word to 'Any of these'.", parent=self)
             return False
         if not self.dest:
-            messagebox.showerror("Invalid Destination", "Destination cannot be empty.", parent=self)
+            messagebox.showerror("Invalid destination", "Destination cannot be empty.", parent=self)
             return False
 
-        # Build a match block only when advanced options are actually used, so a
-        # simple rule stays as short as before. The block carries the 'any' terms
-        # too (from the phrase field) since a present block fully defines matching.
+        # The phrase key is the any-of terms; a match block is written only when
+        # advanced (all/none) terms exist, so a simple rule stays as short as before.
+        self.phrase = "|".join(any_terms)
         self.match = None
-        if self.advanced_var.get():
-            all_terms = [p.strip() for p in self.all_entry.get().split("|") if p.strip()]
-            none_terms = [p.strip() for p in self.none_entry.get().split("|") if p.strip()]
-            if all_terms or none_terms:
-                any_terms = [p.strip() for p in self.phrase.split("|") if p.strip()]
-                self.match = {"any": any_terms, "all": all_terms, "none": none_terms}
+        if all_terms or none_terms:
+            self.match = {"any": any_terms, "all": all_terms, "none": none_terms}
         return True
 
     def apply(self):
