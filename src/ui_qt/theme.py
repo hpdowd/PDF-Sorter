@@ -17,9 +17,10 @@ GOOD = "#1a7f37"
 AMBER = "#9a6700"
 RED = "#cf222e"
 
-# Per-kind chip colours (fill, border) — any=neutral, all=green, none=red.
+# Per-kind chip colours (fill, border) — any=blue, all=green, none=red,
+# matching the role colours the rules-table summary uses for the same terms.
 CHIP = {
-    "any":  ("#eef2f6", "#d5dbe1"),
+    "any":  ("#eaf3fc", "#c9def1"),
     "all":  ("#eef7f1", "#cfe6d7"),
     "none": ("#fbeef0", "#f0cdd2"),
 }
