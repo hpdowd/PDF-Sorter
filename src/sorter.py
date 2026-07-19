@@ -1,14 +1,19 @@
 import os
+import re
 import shutil
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, date
 import fitz  # PyMuPDF
 
 from src import utils
 from src import matching
+from src import dates
 
 logger = logging.getLogger("ocr_file_sorter.sorter")
+
+# Safety cap on how deep a token-expanded destination path may nest.
+_MAX_DEST_DEPTH = 8
 
 
 @dataclass
@@ -252,6 +257,27 @@ class Sorter:
                 total += sum(1 for _ in self._iter_pdfs(folder, deep_audit))
         return total
 
+    @staticmethod
+    def _replace_tokens(template, values):
+        """Expand ``{token}`` placeholders in a template from a values dict.
+
+        The shared placeholder core for both filename renaming (``_apply_naming``)
+        and destination-path expansion (``_expand_dest``) — one place to reason
+        about token substitution.
+        """
+        result = template
+        for key, value in values.items():
+            result = result.replace(key, str(value))
+        return result
+
+    @staticmethod
+    def _sanitize_segment(segment):
+        """Make one path segment safe: drop filesystem-illegal characters and
+        stray surrounding whitespace/dots."""
+        for ch in '<>:"/\\|?*':
+            segment = segment.replace(ch, "")
+        return segment.strip().strip(".")
+
     def _apply_naming(self, rule, phrase, original_path):
         """Compute the destination filename. With a configured naming scheme,
         expand its placeholders; otherwise keep the original name."""
@@ -269,9 +295,7 @@ class Sorter:
             "{time}": now.strftime("%H-%M-%S"),
             "{ext}": ext,
         }
-        new_name = self.naming_scheme
-        for key, value in values.items():
-            new_name = new_name.replace(key, value)
+        new_name = self._replace_tokens(self.naming_scheme, values)
         # Strip characters that are invalid in filenames.
         for ch in '<>:"/\\|?*':
             new_name = new_name.replace(ch, "")
@@ -282,6 +306,55 @@ class Sorter:
         if not os.path.splitext(new_name)[1]:
             new_name += ext
         return new_name
+
+    def _document_date(self, file_path, text):
+        """Best-effort date for a document, content-first with a mtime fallback.
+
+        Content wins because a date printed in the document is more trustworthy
+        than the file's timestamp (and than embedded PDF metadata, which is often
+        wrong after emailing/re-saving). Falls back to the file's modified time so
+        a date-foldered file is never left without a bucket. A date-source
+        preference (UI) will parameterize this order later.
+        """
+        found = dates.extract_date(text) if text else None
+        if found:
+            return found
+        try:
+            return date.fromtimestamp(os.path.getmtime(file_path))
+        except OSError:
+            return None
+
+    def _date_context(self, file_path, text):
+        """Build the date tokens available to destination expansion for one file."""
+        doc_date = self._document_date(file_path, text)
+        if not doc_date:
+            return {}
+        return {
+            "doc_year": f"{doc_date.year:04d}",
+            "doc_month": f"{doc_date.month:02d}",
+            "doc_quarter": f"Q{(doc_date.month - 1) // 3 + 1}",
+        }
+
+    def _expand_dest(self, dest, context):
+        """Expand ``{tokens}`` in a rule's destination path using a per-file
+        context, returning a sanitized relative folder path.
+
+        A token with no value resolves to an ``Unknown`` bucket so a file is never
+        lost. Each path segment is sanitized independently (slashes preserved),
+        empty segments are dropped, and depth is capped. A dest with no tokens is
+        returned unchanged, so existing mappings are unaffected.
+        """
+        if not dest or "{" not in dest:
+            return dest
+        tokens = {
+            "{doc_year}": context.get("doc_year") or "Unknown",
+            "{doc_month}": context.get("doc_month") or "Unknown",
+            "{doc_quarter}": context.get("doc_quarter") or "Unknown",
+        }
+        expanded = self._replace_tokens(dest, tokens)
+        segments = [self._sanitize_segment(s) for s in re.split(r"[\\/]+", expanded)]
+        segments = [s for s in segments if s][:_MAX_DEST_DEPTH]
+        return "/".join(segments) if segments else dest
 
     @staticmethod
     def _unique_path(directory, filename):
@@ -330,6 +403,10 @@ class Sorter:
                     match = self.find_matching_rule(text)
                     if match:
                         phrase, rule, dest = match
+                        # Resolve any {date} tokens in the destination now, so the
+                        # preview shows the real folder (e.g. Statements/2024/03).
+                        if dest and "{" in dest:
+                            dest = self._expand_dest(dest, self._date_context(file_path, text))
                         items.append(PlanItem(
                             file_path, "matched", phrase=phrase, dest=dest,
                             dest_name=self._apply_naming(rule, phrase, file_path)))

@@ -4,6 +4,7 @@ import json
 import shutil
 import tempfile
 import unittest
+from datetime import date
 
 from src.sorter import Sorter, ocr_status
 from src import utils
@@ -269,6 +270,54 @@ class TestNaming(unittest.TestCase):
         with self.assertRaises(AssertionError):
             with self.assertLogs("ocr_file_sorter.sorter", level="WARNING"):
                 s._validate_mapping()  # no warnings expected -> assertLogs raises
+
+
+class TestDestExpansion(unittest.TestCase):
+    def _sorter(self):
+        return make_sorter({"x": {"name": "X", "dest": "Y"}}, "/tmp")
+
+    def test_plain_dest_unchanged(self):
+        self.assertEqual(self._sorter()._expand_dest("Statements", {}), "Statements")
+
+    def test_expands_year_and_month(self):
+        ctx = {"doc_year": "2024", "doc_month": "03", "doc_quarter": "Q1"}
+        self.assertEqual(
+            self._sorter()._expand_dest("Statements/{doc_year}/{doc_month}", ctx),
+            "Statements/2024/03")
+
+    def test_quarter_token(self):
+        ctx = {"doc_year": "2024", "doc_quarter": "Q1"}
+        self.assertEqual(
+            self._sorter()._expand_dest("Reports/{doc_year}/{doc_quarter}", ctx),
+            "Reports/2024/Q1")
+
+    def test_missing_value_becomes_unknown_bucket(self):
+        self.assertEqual(self._sorter()._expand_dest("Statements/{doc_year}", {}),
+                         "Statements/Unknown")
+
+    def test_backslashes_normalized(self):
+        self.assertEqual(self._sorter()._expand_dest(r"A\{doc_year}", {"doc_year": "2024"}),
+                         "A/2024")
+
+    def test_depth_capped(self):
+        deep = "/".join(["a"] * 20) + "/{doc_year}"
+        result = self._sorter()._expand_dest(deep, {"doc_year": "2024"})
+        self.assertLessEqual(len(result.split("/")), 8)
+
+    def test_date_context_prefers_content(self):
+        ctx = self._sorter()._date_context("/does/not/exist.pdf", "invoice dated 2024-03-01")
+        self.assertEqual((ctx["doc_year"], ctx["doc_month"], ctx["doc_quarter"]),
+                         ("2024", "03", "Q1"))
+
+    def test_document_date_falls_back_to_mtime(self):
+        s = self._sorter()
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            path = f.name
+        try:
+            os.utime(path, (0, 0))
+            self.assertEqual(s._document_date(path, "no date here"), date.fromtimestamp(0))
+        finally:
+            os.remove(path)
 
 
 class TestMappingLoading(unittest.TestCase):
