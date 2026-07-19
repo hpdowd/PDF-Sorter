@@ -121,12 +121,21 @@ separate, large undertaking. Options:
 - **B: fold the Qt rewrite into v3.0.0** — one big release, but it delays the features
   significantly and bundles two large changes into one.
 
-## Status / open decision
+## Status: decided and executed — Qt, in v3.0.0
 
-- The branch currently contains the **rejected** Pillow chips + Canvas list. Before
-  any v3.0.0 release, the matching UI must be resolved (revert to native square chips,
-  plain fields, or block on the Qt rewrite).
-- Henry leans **Qt** for the most native look. Recommendation: confirm whether to
-  **decouple** (ship v3.0.0 on native square chips now, Qt as v4.0.0) or **block**
-  v3.0.0 on the Qt rewrite. If Qt proceeds, start a `feature/qt-ui` branch reusing the
-  engine unchanged.
+Henry chose option B: fold the Qt rewrite into v3.0.0 rather than ship the
+features on compromised chips. Executed on `feature/qt-ui`:
+
+- The whole view layer is PySide6 under `src/ui_qt/` (main window, sort preview,
+  mapping editor, dialogs). The engine — `sorter.py`, `matching.py`, `dates.py`,
+  `mapping_editor/editor_logic.py`, the model/IO parts of `utils.py` — was reused
+  unchanged, as predicted above.
+- The Variant A design is now faithful: rounded QSS chips with native text
+  (`ui_qt/chip_input.py`), and the rules list colours each term inline via a
+  rich-text delegate (`ui_qt/rules_table.py`).
+- tkinter, tkinterdnd2, and the Pillow chip hack are gone (`gui.py`, `theme.py`,
+  and the tkinter halves of `src/mapping_editor/` deleted). Folder drag-and-drop
+  is native Qt. The download installer keeps its stdlib tkinter UI on purpose —
+  it must stay a tiny dependency-free bootstrap exe.
+- PyInstaller builds with PySide6 (QtCore/QtGui/QtWidgets only; the heavy Qt
+  extras are excluded in `scripts/build_exe.py` to limit the size cost).

@@ -69,7 +69,9 @@ PDF-Sorter/
 
 ### **Smart Sorting**
 - **Custom Mappings**: Create your own sorting rules
-- **Multiple Phrases**: One rule can match several phrases (separate with `|`)
+- **Multiple Phrases**: One rule can match several phrases
+- **Advanced Matching**: Optionally require a rule to match *any*, *all*, or *none* of several words
+- **Date Foldering**: Optionally file into date subfolders (year / quarter / month) using a date read from the document
 - **Output Folder**: Choose where sorted files are filed
 - **Preview, Cancel & Undo**: Review the plan before sorting; stop a running sort; copy or move; undo the last sort
 - **Template System**: Predefined folder structures
