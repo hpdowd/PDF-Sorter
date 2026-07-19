@@ -6,6 +6,7 @@ from datetime import datetime
 import fitz  # PyMuPDF
 
 from src import utils
+from src import matching
 
 logger = logging.getLogger("ocr_file_sorter.sorter")
 
@@ -165,17 +166,17 @@ class Sorter:
         has no destination is warned about and skipped (so it doesn't block a
         later valid match). Search is case-insensitive + whitespace-normalized.
         """
-        normalized_text = ' '.join(text.split()).lower()
+        normalized_text = matching.normalize(text)
 
         for phrase, rule in self.mapping_data.items():
             if phrase in utils.RESERVED_MAPPING_KEYS:
                 continue
-            # A rule key may hold several alternative phrases separated by '|';
-            # the rule matches if ANY alternative appears in the text. A key with
-            # no '|' is a single phrase, so this stays backward-compatible. Each
-            # alternative is normalized the same way as the text.
-            alternatives = [' '.join(p.split()).lower() for p in phrase.split('|') if p.strip()]
-            matched = next((alt for alt in alternatives if alt in normalized_text), None)
+            # Matching is delegated to the pure matcher: the rule resolves to a
+            # normalized {all, any, none} spec (today derived from the key's '|'
+            # alternatives as any-of, so this stays backward-compatible) which is
+            # then evaluated against the text.
+            matched, which_term = matching.match_rule(
+                normalized_text, matching.resolve_match_spec(phrase, rule))
 
             if matched:
                 # New-format rules are dicts ({"name", "dest"}); migrated
@@ -185,7 +186,7 @@ class Sorter:
                     logger.warning("Rule %r matched but has no destination; skipping", phrase)
                     continue
                 if self.status_callback:
-                    self.status_callback(f"Found a match for keyword: '{matched}'")
+                    self.status_callback(f"Found a match for keyword: '{which_term}'")
                 return phrase, rule, destination
         return None
 
