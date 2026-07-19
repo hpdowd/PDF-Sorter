@@ -59,24 +59,34 @@ class EditorLogic:
             self.config.pop("naming_scheme", None)
         self.is_dirty = True
 
-    def add_rule(self, phrase, name, dest):
-        """Adds a new mapping rule."""
+    def add_rule(self, phrase, name, dest, match=None):
+        """Adds a new mapping rule. An optional match block carries advanced
+        (all/any/none) matching; omitted for simple rules."""
         if phrase in self.mappings:
             return False, "This phrase or keyword already exists."
-        self.mappings[phrase] = {"name": name, "dest": dest}
+        self.mappings[phrase] = self._build_rule(name, dest, match)
         self.is_dirty = True
         return True, None
 
-    def update_rule(self, old_phrase, new_phrase, new_name, new_dest):
+    def update_rule(self, old_phrase, new_phrase, new_name, new_dest, match=None):
         """Updates an existing mapping rule."""
         if new_phrase != old_phrase and new_phrase in self.mappings:
             return False, "This phrase or keyword already exists."
         # Remove old one if phrase changed
         if old_phrase in self.mappings and new_phrase != old_phrase:
             del self.mappings[old_phrase]
-        self.mappings[new_phrase] = {"name": new_name, "dest": new_dest}
+        self.mappings[new_phrase] = self._build_rule(new_name, new_dest, match)
         self.is_dirty = True
         return True, None
+
+    @staticmethod
+    def _build_rule(name, dest, match=None):
+        """Assemble a rule dict, including a match block only when one is given
+        (so simple rules stay as compact as before)."""
+        rule = {"name": name, "dest": dest}
+        if match:
+            rule["match"] = match
+        return rule
 
     def remove_rule(self, phrase):
         """Removes a mapping rule."""

@@ -128,40 +128,83 @@ class NewMappingDialog(BaseDialog):
         self.import_path = self.import_path_var.get() if self.import_selected else None
 
 class PatternDestDialog(BaseDialog):
-    """Dialog for adding or editing a mapping rule (name, phrase, and destination)."""
-    def __init__(self, parent, title, template_dir, destinations, initial_name="", initial_phrase="", initial_dest=""):
+    """Dialog for adding or editing a mapping rule.
+
+    The simple case is unchanged: a rule name, an *Any of these* phrase field, and
+    a destination. An *Advanced matching* toggle (progressive disclosure) reveals
+    optional *All of these* and *None of these* rows. Only the leading word differs
+    across the three so the any/all/none distinction reads at a glance. Advanced
+    options are persisted as a ``match`` block (built in :meth:`validate`); a rule
+    that uses none stays exactly as short as before.
+    """
+    def __init__(self, parent, title, template_dir, destinations, initial_name="",
+                 initial_phrase="", initial_dest="", initial_match=None):
         self.template_dir = template_dir
         self.destinations = destinations
         self.initial_name = initial_name
         self.initial_phrase = initial_phrase
         self.initial_dest = initial_dest
+        self.initial_match = initial_match or {}
+        self.match = None
         super().__init__(parent, title)
+
+    @staticmethod
+    def _terms(values):
+        return [str(t).strip() for t in (values or []) if str(t).strip()]
 
     def body(self, master):
         master.grid_columnconfigure(0, weight=1)
+
+        initial_all = self._terms(self.initial_match.get("all"))
+        initial_none = self._terms(self.initial_match.get("none"))
 
         ttk.Label(master, text="Rule Name (for easy identification):").pack(anchor="w", pady=(0, 2))
         self.name_entry = ttk.Entry(master, width=50)
         self.name_entry.pack(fill="x", expand=True, pady=(0, 10))
         self.name_entry.insert(0, self.initial_name)
 
-        ttk.Label(master, text="Phrase/Keyword (must be unique):").pack(anchor="w", pady=(0, 2))
+        ttk.Label(master, text="Any of these words or phrases (must be unique):").pack(anchor="w", pady=(0, 2))
         self.phrase_entry = ttk.Entry(master, width=50)
         self.phrase_entry.pack(fill="x", expand=True, pady=(0, 2))
         self.phrase_entry.insert(0, self.initial_phrase)
         ttk.Label(
             master,
-            text="Tip: separate alternatives with |  e.g. invoice|receipt  (matches if any appears)",
-            foreground="#57606a",
+            text="Separate alternatives with |  e.g. invoice|receipt  (matches if any appears)",
+            style="Muted.TLabel",
         ).pack(anchor="w", pady=(0, 10))
 
         ttk.Label(master, text="Destination Folder:").pack(anchor="w", pady=(0, 2))
         self.dest_combo = ttk.Combobox(master, values=self.destinations, width=47)
-        self.dest_combo.pack(fill="x", expand=True)
-        if self.initial_dest in self.destinations:
+        self.dest_combo.pack(fill="x", expand=True, pady=(0, 10))
+        if self.initial_dest:
             self.dest_combo.set(self.initial_dest)
-        
+
+        # --- Advanced matching (progressive disclosure) ---
+        self.advanced_var = tk.BooleanVar(value=bool(initial_all or initial_none))
+        ttk.Checkbutton(master, text="Advanced matching", variable=self.advanced_var,
+                        command=self._toggle_advanced).pack(anchor="w")
+
+        self.adv_frame = ttk.Frame(master)
+        ttk.Label(self.adv_frame, text="All of these (must also contain):").pack(anchor="w", pady=(8, 2))
+        self.all_entry = ttk.Entry(self.adv_frame, width=50)
+        self.all_entry.pack(fill="x", expand=True, pady=(0, 2))
+        self.all_entry.insert(0, " | ".join(initial_all))
+        ttk.Label(self.adv_frame, text="None of these (ignore the file if it contains):").pack(anchor="w", pady=(8, 2))
+        self.none_entry = ttk.Entry(self.adv_frame, width=50)
+        self.none_entry.pack(fill="x", expand=True, pady=(0, 2))
+        self.none_entry.insert(0, " | ".join(initial_none))
+        ttk.Label(self.adv_frame, text="Separate multiple with |", style="Muted.TLabel").pack(anchor="w")
+
+        if self.advanced_var.get():
+            self.adv_frame.pack(fill="x", expand=True, pady=(0, 4))
+
         return self.name_entry
+
+    def _toggle_advanced(self):
+        if self.advanced_var.get():
+            self.adv_frame.pack(fill="x", expand=True, pady=(0, 4))
+        else:
+            self.adv_frame.pack_forget()
 
     def validate(self):
         self.name = self.name_entry.get().strip()
@@ -171,11 +214,22 @@ class PatternDestDialog(BaseDialog):
             messagebox.showerror("Invalid Name", "Rule Name cannot be empty.", parent=self)
             return False
         if not self.phrase:
-            messagebox.showerror("Invalid Phrase", "Phrase/Keyword cannot be empty.", parent=self)
+            messagebox.showerror("Invalid Phrase", "'Any of these' cannot be empty.", parent=self)
             return False
         if not self.dest:
             messagebox.showerror("Invalid Destination", "Destination cannot be empty.", parent=self)
             return False
+
+        # Build a match block only when advanced options are actually used, so a
+        # simple rule stays as short as before. The block carries the 'any' terms
+        # too (from the phrase field) since a present block fully defines matching.
+        self.match = None
+        if self.advanced_var.get():
+            all_terms = [p.strip() for p in self.all_entry.get().split("|") if p.strip()]
+            none_terms = [p.strip() for p in self.none_entry.get().split("|") if p.strip()]
+            if all_terms or none_terms:
+                any_terms = [p.strip() for p in self.phrase.split("|") if p.strip()]
+                self.match = {"any": any_terms, "all": all_terms, "none": none_terms}
         return True
 
     def apply(self):

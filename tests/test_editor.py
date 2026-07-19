@@ -22,25 +22,31 @@ BASE = {
 
 
 class FakeTable:
-    """Minimal stand-in for the MappingTable Treeview (name, phrase, dest)."""
+    """Minimal stand-in for the MappingTable Treeview. The row iid is the phrase
+    key, mirroring the real widget; selection() yields that key."""
     def __init__(self):
-        self._rows = []
+        self._rows = {}
+        self._order = []
         self._sel = ()
 
-    def set_rows(self, rows):
-        self._rows = rows
+    def set_rows(self, mappings):
+        self._order = list(mappings.keys())
+        self._rows = {p: (r["name"], p, r["dest"]) for p, r in mappings.items()}
 
     def selection(self):
-        return (str(self._sel[0]),) if self._sel else ()
+        return (self._sel[0],) if self._sel else ()
 
     def item(self, item_id, what):
-        return self._rows[int(item_id)]
+        return self._rows[item_id]
 
     def get_children(self):
-        return tuple(str(i) for i in range(len(self._rows)))
+        return tuple(self._order)
 
     def selection_set(self, item_id):
-        self._sel = (int(item_id),)
+        self._sel = (item_id,)
+
+    def see(self, item_id):
+        pass
 
 
 class FakeView:
@@ -51,9 +57,7 @@ class FakeView:
         self._rebuild()
 
     def _rebuild(self):
-        self.mapping_table.set_rows(
-            [(r["name"], p, r["dest"]) for p, r in self.logic.mappings.items()]
-        )
+        self.mapping_table.set_rows(self.logic.mappings)
 
     def refresh_mapping_table(self):
         self._rebuild()
@@ -88,24 +92,42 @@ class TestEditorLogic(unittest.TestCase):
         self.assertTrue(logic.move_rule("report", "up"))
         self.assertEqual(list(logic.mappings), ["invoice", "report", "receipt"])
 
+    def test_add_rule_without_match_stays_compact(self):
+        logic = EditorLogic()
+        logic.add_rule("phrase", "Name", "Dest")
+        self.assertNotIn("match", logic.mappings["phrase"])
+
+    def test_add_rule_with_match_persists_block(self):
+        logic = EditorLogic()
+        match = {"any": ["invoice"], "all": ["acme"], "none": ["quote"]}
+        logic.add_rule("acme invoices", "Acme", "Billing", match)
+        self.assertEqual(logic.mappings["acme invoices"]["match"], match)
+
+    def test_update_rule_can_drop_match_block(self):
+        logic = EditorLogic()
+        logic.add_rule("p", "N", "D", {"any": ["p"], "all": ["x"], "none": []})
+        # Editing with match=None (advanced turned off) removes the block.
+        logic.update_rule("p", "p", "N", "D", None)
+        self.assertNotIn("match", logic.mappings["p"])
+
 
 class TestEditorActionsRegression(unittest.TestCase):
     def test_remove_rule(self):
         logic, view, actions = make(BASE)
-        view.mapping_table._sel = (0,)  # invoice
+        view.mapping_table._sel = ("invoice",)
         actions.on_remove_rule()
         self.assertEqual(list(logic.mappings), ["receipt", "report"])
         self.assertTrue(view.dirty)
 
     def test_move_up(self):
         logic, view, actions = make(BASE)
-        view.mapping_table._sel = (2,)  # report
+        view.mapping_table._sel = ("report",)
         actions.on_move_rule("up")
         self.assertEqual(list(logic.mappings), ["invoice", "report", "receipt"])
 
     def test_move_down(self):
         logic, view, actions = make(BASE)
-        view.mapping_table._sel = (0,)  # invoice
+        view.mapping_table._sel = ("invoice",)
         actions.on_move_rule("down")
         self.assertEqual(list(logic.mappings), ["receipt", "invoice", "report"])
 

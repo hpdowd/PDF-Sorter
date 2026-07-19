@@ -133,7 +133,7 @@ class EditorActions:
         dialog = PatternDestDialog(self.view, "Add Rule", self.logic.template_dir, destinations)
         if not dialog.result: return # Check if the user clicked OK
 
-        success, message = self.logic.add_rule(dialog.phrase, dialog.name, dialog.dest)
+        success, message = self.logic.add_rule(dialog.phrase, dialog.name, dialog.dest, dialog.match)
         if success:
             self.view.refresh_mapping_table()
             self.view.set_dirty(True)
@@ -147,13 +147,20 @@ class EditorActions:
             messagebox.showwarning("No Selection", "Please select a mapping to edit.", parent=self.view)
             return
         
-        name, phrase, dest = self.view.mapping_table.item(selected_item[0], "values")
+        # The row's iid is the phrase key; read the full rule (incl. any match
+        # block) from the model rather than the displayed summary.
+        phrase = selected_item[0]
+        rule = self.logic.mappings.get(phrase, {})
+        name = rule.get("name", "") if isinstance(rule, dict) else ""
+        dest = rule.get("dest", "") if isinstance(rule, dict) else (rule or "")
+        match = rule.get("match") if isinstance(rule, dict) else None
         destinations = self.logic.get_all_destinations()
-        dialog = PatternDestDialog(self.view, "Edit Rule", self.logic.template_dir, destinations, 
-                                   initial_name=name, initial_phrase=phrase, initial_dest=dest)
+        dialog = PatternDestDialog(self.view, "Edit Rule", self.logic.template_dir, destinations,
+                                   initial_name=name, initial_phrase=phrase, initial_dest=dest,
+                                   initial_match=match)
         if not dialog.result: return # Check if the user clicked OK
 
-        success, message = self.logic.update_rule(phrase, dialog.phrase, dialog.name, dialog.dest)
+        success, message = self.logic.update_rule(phrase, dialog.phrase, dialog.name, dialog.dest, dialog.match)
         if success:
             self.view.refresh_mapping_table()
             self.view.set_dirty(True)
@@ -166,7 +173,7 @@ class EditorActions:
         if not selected_item:
             messagebox.showwarning("No Selection", "Please select a mapping to remove.", parent=self.view)
             return
-        _name, phrase, _dest = self.view.mapping_table.item(selected_item[0], "values")
+        phrase = selected_item[0]  # iid is the phrase key
         self.logic.remove_rule(phrase)
         self.view.refresh_mapping_table()
         self.view.set_dirty(True)
@@ -175,12 +182,12 @@ class EditorActions:
         """Handle moving a rule up or down."""
         selected_item = self.view.mapping_table.selection()
         if not selected_item: return
-        _name, phrase, _dest = self.view.mapping_table.item(selected_item[0], "values")
+        phrase = selected_item[0]  # iid is the phrase key
         if self.logic.move_rule(phrase, direction):
             self.view.refresh_mapping_table()
-            # Reselect the item after refresh
-            new_index = list(self.logic.mappings.keys()).index(phrase)
-            self.view.mapping_table.selection_set(self.view.mapping_table.get_children()[new_index])
+            # Reselect the item after refresh (its iid is unchanged).
+            self.view.mapping_table.selection_set(phrase)
+            self.view.mapping_table.see(phrase)
             self.view.set_dirty(True)
 
     def on_rename_template_folder(self):
