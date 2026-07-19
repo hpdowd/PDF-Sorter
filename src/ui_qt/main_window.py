@@ -326,6 +326,13 @@ class MainWindow(QMainWindow):
             self.folder_list.takeItem(self.folder_list.row(item))
 
     def _open_mapping_editor(self):
+        # One editor at a time: two windows editing the same mapping would
+        # silently lose whichever was saved first.
+        if self._editor is not None:
+            self._editor.raise_()
+            self._editor.activateWindow()
+            return
+
         def on_save_callback():
             selected = os.path.basename(self.mapping_path) if self.mapping_path else None
             self.settings[LAST_MAPPING_KEY] = selected
@@ -335,6 +342,8 @@ class MainWindow(QMainWindow):
                 self.mapping_combo.setCurrentText(selected)
         self._editor = MappingEditor(self, on_save_callback=on_save_callback,
                                      mapping_path=self.mapping_path)
+        self._editor.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._editor.destroyed.connect(lambda: setattr(self, "_editor", None))
         self._editor.show()
 
     # --- sort flow --------------------------------------------------------
