@@ -57,20 +57,38 @@ def build_executable(debug=False):
         f"--distpath={PROJECT_ROOT / 'dist'}",
         f"--workpath={PROJECT_ROOT / 'build'}",
         f"--specpath={PROJECT_ROOT / 'build'}",
-        # Ensure `from src import gui` resolves during analysis.
+        # Ensure `from src.ui_qt import app` resolves during analysis.
         f"--paths={PROJECT_ROOT}",
         # Add data files.
         f"--add-data={SRC / 'icons' / '*'};src/icons",
         f"--add-data={SRC / 'mappings' / 'example.json'};src/mappings",
         f"--add-data={SRC / 'mappings' / 'example_template'};src/mappings/example_template",
         # Hidden imports that PyInstaller may miss.
-        "--hidden-import=tkinter",
-        "--hidden-import=tkinterdnd2",
+        "--hidden-import=PySide6.QtCore",
+        "--hidden-import=PySide6.QtGui",
+        "--hidden-import=PySide6.QtWidgets",
         "--hidden-import=PIL",
-        "--hidden-import=PIL._tkinter_finder",
         "--hidden-import=fitz",
         "--hidden-import=pymupdf",
         "--hidden-import=pytesseract",
+        # The app uses only QtCore/QtGui/QtWidgets; skip the heavy Qt extras
+        # (WebEngine, QML, 3D…) that PySide6 would otherwise pull in.
+        "--exclude-module=PySide6.QtWebEngineCore",
+        "--exclude-module=PySide6.QtWebEngineWidgets",
+        "--exclude-module=PySide6.QtQml",
+        "--exclude-module=PySide6.QtQuick",
+        "--exclude-module=PySide6.QtQuickWidgets",
+        "--exclude-module=PySide6.Qt3DCore",
+        "--exclude-module=PySide6.Qt3DRender",
+        "--exclude-module=PySide6.QtCharts",
+        "--exclude-module=PySide6.QtDataVisualization",
+        "--exclude-module=PySide6.QtMultimedia",
+        "--exclude-module=PySide6.QtNetwork",
+        "--exclude-module=PySide6.QtOpenGL",
+        "--exclude-module=PySide6.QtPdf",
+        "--exclude-module=PySide6.QtSql",
+        "--exclude-module=PySide6.QtTest",
+        "--exclude-module=tkinter",
         # More selective PyMuPDF inclusion (avoid dev files).
         "--collect-submodules=fitz",
         "--collect-submodules=pymupdf",

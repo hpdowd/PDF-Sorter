@@ -1,6 +1,6 @@
 import os
 import shutil
-from src import utils
+from src import utils, matching
 
 class EditorLogic:
     """
@@ -59,24 +59,52 @@ class EditorLogic:
             self.config.pop("naming_scheme", None)
         self.is_dirty = True
 
-    def add_rule(self, phrase, name, dest):
-        """Adds a new mapping rule."""
+    def get_foldering(self):
+        """The mapping's subfolder-foldering config ({} when off)."""
+        return self.config.get("foldering", {})
+
+    def set_foldering(self, foldering):
+        """Set/clear the foldering config; marks dirty only on an actual change."""
+        if (foldering or {}) == self.config.get("foldering", {}):
+            return
+        if foldering:
+            self.config["foldering"] = foldering
+        else:
+            self.config.pop("foldering", None)
+        self.is_dirty = True
+
+    def add_rule(self, phrase, name, dest, match=None):
+        """Adds a new mapping rule. An optional match block carries advanced
+        (all/any/none) matching; omitted for simple rules."""
         if phrase in self.mappings:
             return False, "This phrase or keyword already exists."
-        self.mappings[phrase] = {"name": name, "dest": dest}
+        self.mappings[phrase] = self._build_rule(name, dest, match)
         self.is_dirty = True
         return True, None
 
-    def update_rule(self, old_phrase, new_phrase, new_name, new_dest):
-        """Updates an existing mapping rule."""
+    def update_rule(self, old_phrase, new_phrase, new_name, new_dest, match=None):
+        """Updates an existing mapping rule, keeping its position in the order
+        (order is match priority: the first matching rule wins)."""
         if new_phrase != old_phrase and new_phrase in self.mappings:
             return False, "This phrase or keyword already exists."
-        # Remove old one if phrase changed
-        if old_phrase in self.mappings and new_phrase != old_phrase:
-            del self.mappings[old_phrase]
-        self.mappings[new_phrase] = {"name": new_name, "dest": new_dest}
+        rule = self._build_rule(new_name, new_dest, match)
+        if old_phrase in self.mappings:
+            self.mappings = {(new_phrase if k == old_phrase else k):
+                             (rule if k == old_phrase else v)
+                             for k, v in self.mappings.items()}
+        else:
+            self.mappings[new_phrase] = rule
         self.is_dirty = True
         return True, None
+
+    @staticmethod
+    def _build_rule(name, dest, match=None):
+        """Assemble a rule dict, including a match block only when one is given
+        (so simple rules stay as compact as before)."""
+        rule = {"name": name, "dest": dest}
+        if match:
+            rule["match"] = match
+        return rule
 
     def remove_rule(self, phrase):
         """Removes a mapping rule."""
@@ -100,6 +128,25 @@ class EditorLogic:
         else:
             return False # No move was possible
 
+        self.mappings = {k: self.mappings[k] for k in keys}
+        self.is_dirty = True
+        return True
+
+    def reorder_rule(self, phrase, new_index):
+        """Moves a rule to a specific position (a drop-row index as counted
+        before the rule is lifted out). False if nothing actually moved."""
+        keys = list(self.mappings.keys())
+        try:
+            old_index = keys.index(phrase)
+        except ValueError:
+            return False
+        keys.pop(old_index)
+        if new_index > old_index:
+            new_index -= 1
+        new_index = max(0, min(new_index, len(keys)))
+        if new_index == old_index:
+            return False
+        keys.insert(new_index, phrase)
         self.mappings = {k: self.mappings[k] for k in keys}
         self.is_dirty = True
         return True
@@ -143,6 +190,33 @@ class EditorLogic:
                 os.makedirs(folder_path, exist_ok=True)
                 created += 1
         return created
+
+    def test_pdf(self, pdf_path):
+        """Run the current (possibly unsaved) rules against one PDF and report
+        which rule matched, on which term, and where it would go.
+
+        Returns a human-readable multi-line string for a dialog. Reuses the real
+        Sorter so what's shown here is exactly what a sort would do.
+        """
+        from src.sorter import Sorter  # local import to avoid a heavy import at load
+        data = {"_config": self.config, **self.mappings} if self.config else dict(self.mappings)
+        sorter = Sorter.from_mapping_data(data, self.template_dir)
+
+        text = sorter.read_pdf_text(pdf_path)
+        if not text:
+            return "No readable text found in this PDF (even after OCR)."
+        match = sorter.find_matching_rule(text)
+        if not match:
+            return "No rule matched this document."
+
+        phrase, rule, dest = match
+        _matched, which = matching.match_rule(
+            matching.normalize(text), matching.resolve_match_spec(phrase, rule))
+        dest = sorter._resolve_dest(dest, pdf_path, text)
+        name = (rule.get("name") if isinstance(rule, dict) else None) or phrase
+        return (f"Matched rule:  {name}\n"
+                f"Matched on:   {which}\n"
+                f"Destination:  {dest}")
 
     def get_all_destinations(self):
         """Get all possible destination folders from the template directory."""

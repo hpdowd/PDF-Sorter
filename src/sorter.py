@@ -1,13 +1,26 @@
 import os
+import re
 import shutil
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, date
 import fitz  # PyMuPDF
 
 from src import utils
+from src import matching
+from src import dates
 
 logger = logging.getLogger("ocr_file_sorter.sorter")
+
+# Safety cap on how deep a token-expanded destination path may nest.
+_MAX_DEST_DEPTH = 8
+
+# How a "Group by" foldering choice maps to destination-path date tokens.
+_GROUP_TOKENS = {
+    "year": "{doc_year}",
+    "quarter": "{doc_year}/{doc_quarter}",
+    "year_month": "{doc_year}/{doc_month}",
+}
 
 
 @dataclass
@@ -55,8 +68,9 @@ class Sorter:
         self.status_callback = status_callback
         self._cancelled = False
         self.mapping_data = self.load_mapping()
-        # Optional filename scheme, defined in the mapping under "_config".
+        # Optional filename scheme and subfolder foldering, under "_config".
         self.naming_scheme = (self.mapping_data.get("_config") or {}).get("naming_scheme") or None
+        self.foldering = (self.mapping_data.get("_config") or {}).get("foldering") or {}
         self._validate_mapping()
         # Destination root for sorted files. When the caller supplies an output
         # directory (the GUI's "Output folder" picker), sort into it. Otherwise
@@ -68,6 +82,25 @@ class Sorter:
             self.template_dir = os.path.splitext(self.mapping_path)[0] + "_template"
         if not os.path.exists(self.template_dir):
             os.makedirs(self.template_dir)
+
+    @classmethod
+    def from_mapping_data(cls, mapping_data, template_dir=None):
+        """Build a Sorter around already-loaded mapping data, without any
+        filesystem side effects (no mapping load, no template dir creation).
+
+        Used to test a single PDF against the editor's current — possibly
+        unsaved — rules. Reuses the exact matching/expansion the real sort uses.
+        """
+        s = cls.__new__(cls)
+        s.status_callback = None
+        s.progress_callback = None
+        s.mapping_path = None
+        s.template_dir = template_dir
+        s.mapping_data = mapping_data or {}
+        s.naming_scheme = (s.mapping_data.get("_config") or {}).get("naming_scheme") or None
+        s.foldering = (s.mapping_data.get("_config") or {}).get("foldering") or {}
+        s._cancelled = False
+        return s
 
     def cancel(self):
         """Request cooperative cancellation of an in-progress plan/execute.
@@ -165,17 +198,17 @@ class Sorter:
         has no destination is warned about and skipped (so it doesn't block a
         later valid match). Search is case-insensitive + whitespace-normalized.
         """
-        normalized_text = ' '.join(text.split()).lower()
+        normalized_text = matching.normalize(text)
 
         for phrase, rule in self.mapping_data.items():
             if phrase in utils.RESERVED_MAPPING_KEYS:
                 continue
-            # A rule key may hold several alternative phrases separated by '|';
-            # the rule matches if ANY alternative appears in the text. A key with
-            # no '|' is a single phrase, so this stays backward-compatible. Each
-            # alternative is normalized the same way as the text.
-            alternatives = [' '.join(p.split()).lower() for p in phrase.split('|') if p.strip()]
-            matched = next((alt for alt in alternatives if alt in normalized_text), None)
+            # Matching is delegated to the pure matcher: the rule resolves to a
+            # normalized {all, any, none} spec (today derived from the key's '|'
+            # alternatives as any-of, so this stays backward-compatible) which is
+            # then evaluated against the text.
+            matched, which_term = matching.match_rule(
+                normalized_text, matching.resolve_match_spec(phrase, rule))
 
             if matched:
                 # New-format rules are dicts ({"name", "dest"}); migrated
@@ -185,7 +218,7 @@ class Sorter:
                     logger.warning("Rule %r matched but has no destination; skipping", phrase)
                     continue
                 if self.status_callback:
-                    self.status_callback(f"Found a match for keyword: '{matched}'")
+                    self.status_callback(f"Found a match for keyword: '{which_term}'")
                 return phrase, rule, destination
         return None
 
@@ -251,6 +284,27 @@ class Sorter:
                 total += sum(1 for _ in self._iter_pdfs(folder, deep_audit))
         return total
 
+    @staticmethod
+    def _replace_tokens(template, values):
+        """Expand ``{token}`` placeholders in a template from a values dict.
+
+        The shared placeholder core for both filename renaming (``_apply_naming``)
+        and destination-path expansion (``_expand_dest``) — one place to reason
+        about token substitution.
+        """
+        result = template
+        for key, value in values.items():
+            result = result.replace(key, str(value))
+        return result
+
+    @staticmethod
+    def _sanitize_segment(segment):
+        """Make one path segment safe: drop filesystem-illegal characters and
+        stray surrounding whitespace/dots."""
+        for ch in '<>:"/\\|?*':
+            segment = segment.replace(ch, "")
+        return segment.strip().strip(".")
+
     def _apply_naming(self, rule, phrase, original_path):
         """Compute the destination filename. With a configured naming scheme,
         expand its placeholders; otherwise keep the original name."""
@@ -268,9 +322,7 @@ class Sorter:
             "{time}": now.strftime("%H-%M-%S"),
             "{ext}": ext,
         }
-        new_name = self.naming_scheme
-        for key, value in values.items():
-            new_name = new_name.replace(key, value)
+        new_name = self._replace_tokens(self.naming_scheme, values)
         # Strip characters that are invalid in filenames.
         for ch in '<>:"/\\|?*':
             new_name = new_name.replace(ch, "")
@@ -281,6 +333,104 @@ class Sorter:
         if not os.path.splitext(new_name)[1]:
             new_name += ext
         return new_name
+
+    def _mtime_date(self, file_path):
+        try:
+            return date.fromtimestamp(os.path.getmtime(file_path))
+        except OSError:
+            return None
+
+    def _pdf_metadata_date(self, file_path):
+        """Date embedded in the PDF (creation, else modification). Often wrong
+        after emailing/re-saving — offered but not the default."""
+        try:
+            with fitz.open(file_path) as doc:
+                meta = doc.metadata or {}
+        except Exception:
+            return None
+        raw = meta.get("creationDate") or meta.get("modDate") or ""
+        m = re.search(r"(\d{4})(\d{2})(\d{2})", raw)
+        if not m:
+            return None
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            return None
+
+    def _document_date(self, file_path, text, source="content"):
+        """Best-effort date for a document from the chosen source, always with a
+        fallback so a date-foldered file is never left without a bucket.
+
+        Content is the default because a date printed in the document is more
+        trustworthy than the file's timestamp or embedded PDF metadata (the same
+        reason filename renaming derives names from content).
+        """
+        if source == "file_modified":
+            return self._mtime_date(file_path)
+        if source == "pdf_metadata":
+            found = self._pdf_metadata_date(file_path)
+            if found:
+                return found
+            # fall through to content, then mtime
+        found = dates.extract_date(text) if text else None
+        if found:
+            return found
+        return self._mtime_date(file_path)
+
+    def _date_context(self, file_path, text, source="content"):
+        """Build the date tokens available to destination expansion for one file."""
+        doc_date = self._document_date(file_path, text, source)
+        if not doc_date:
+            return {}
+        return {
+            "doc_year": f"{doc_date.year:04d}",
+            "doc_month": f"{doc_date.month:02d}",
+            "doc_quarter": f"Q{(doc_date.month - 1) // 3 + 1}",
+        }
+
+    def _foldering_template(self):
+        """The date-token subpath appended to every destination by the mapping's
+        global foldering setting, or "" when foldering is off."""
+        if (self.foldering.get("by") or "none") != "date":
+            return ""
+        return _GROUP_TOKENS.get(self.foldering.get("group") or "year_month",
+                                 _GROUP_TOKENS["year_month"])
+
+    def _resolve_dest(self, base_dest, file_path, text):
+        """Resolve a rule's destination for one file: expand any per-rule date
+        tokens, then append the mapping's global date-foldering subpath. Returns
+        ``base_dest`` unchanged when neither applies (existing mappings)."""
+        template = self._foldering_template()
+        if not template and not (base_dest and "{" in base_dest):
+            return base_dest
+        source = self.foldering.get("date_source") or "content"
+        context = self._date_context(file_path, text, source)
+        dest = self._expand_dest(base_dest, context) if base_dest and "{" in base_dest else base_dest
+        if template:
+            suffix = self._expand_dest(template, context)
+            dest = f"{dest}/{suffix}" if dest else suffix
+        return dest
+
+    def _expand_dest(self, dest, context):
+        """Expand ``{tokens}`` in a rule's destination path using a per-file
+        context, returning a sanitized relative folder path.
+
+        A token with no value resolves to an ``Unknown`` bucket so a file is never
+        lost. Each path segment is sanitized independently (slashes preserved),
+        empty segments are dropped, and depth is capped. A dest with no tokens is
+        returned unchanged, so existing mappings are unaffected.
+        """
+        if not dest or "{" not in dest:
+            return dest
+        tokens = {
+            "{doc_year}": context.get("doc_year") or "Unknown",
+            "{doc_month}": context.get("doc_month") or "Unknown",
+            "{doc_quarter}": context.get("doc_quarter") or "Unknown",
+        }
+        expanded = self._replace_tokens(dest, tokens)
+        segments = [self._sanitize_segment(s) for s in re.split(r"[\\/]+", expanded)]
+        segments = [s for s in segments if s][:_MAX_DEST_DEPTH]
+        return "/".join(segments) if segments else dest
 
     @staticmethod
     def _unique_path(directory, filename):
@@ -329,6 +479,9 @@ class Sorter:
                     match = self.find_matching_rule(text)
                     if match:
                         phrase, rule, dest = match
+                        # Resolve per-rule tokens + global date foldering now, so
+                        # the preview shows the real folder (e.g. Statements/2024/03).
+                        dest = self._resolve_dest(dest, file_path, text)
                         items.append(PlanItem(
                             file_path, "matched", phrase=phrase, dest=dest,
                             dest_name=self._apply_naming(rule, phrase, file_path)))
