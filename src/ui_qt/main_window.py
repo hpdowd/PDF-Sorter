@@ -272,13 +272,24 @@ class MainWindow(QMainWindow):
 
     def _show_about(self):
         available, detail = sorter.ocr_status()
-        ocr_line = detail if available else f"unavailable — {detail}"
-        QMessageBox.information(
-            self, "About OCR File Sorter",
-            f"OCR File Sorter\nVersion {__version__}\n\n"
+        if available:
+            ocr_line = detail
+        else:
+            # The road back to OCR for users who dismissed the warning banner.
+            ocr_line = (
+                f"unavailable — {detail}<br>"
+                '<a href="https://github.com/UB-Mannheim/tesseract/wiki">'
+                "Get Tesseract</a> (choose “install just for me” — no admin needed)")
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("About OCR File Sorter")
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText(
+            f"<b>OCR File Sorter</b><br>Version {__version__}<br><br>"
             "Sorts PDFs into folders based on their text content, "
-            "with an OCR fallback for scanned documents.\n\n"
+            "with an OCR fallback for scanned documents.<br><br>"
             f"OCR: {ocr_line}")
+        box.exec()
 
     # --- mapping / output / folders ---------------------------------------
 
