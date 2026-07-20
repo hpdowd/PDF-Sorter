@@ -160,6 +160,26 @@ class TestRulesTable(unittest.TestCase):
         self.assertNotIn("<br>", html)
 
 
+class TestTesseractDownloadUrl(unittest.TestCase):
+    def test_resolves_current_installer_asset(self):
+        from unittest.mock import MagicMock, patch
+        from src.ui_qt import main_window
+        payload = ('{"assets": [{"name": "tesseract-ocr-w64-setup-9.9.9.exe",'
+                   ' "browser_download_url": "https://x/t.exe"}]}')
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = payload.encode()
+        with patch("urllib.request.urlopen", return_value=response):
+            self.assertEqual(main_window.resolve_tesseract_download_url(),
+                             "https://x/t.exe")
+
+    def test_falls_back_to_releases_page(self):
+        from unittest.mock import patch
+        from src.ui_qt import main_window
+        with patch("urllib.request.urlopen", side_effect=OSError("offline")):
+            self.assertEqual(main_window.resolve_tesseract_download_url(),
+                             main_window.TESSERACT_RELEASES_URL)
+
+
 class TestPatternDestDialog(unittest.TestCase):
     def test_simple_rule_builds_phrase_only(self):
         dialog = PatternDestDialog(None, "Add Rule", None, ["Invoices"],
