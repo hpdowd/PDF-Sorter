@@ -1,6 +1,8 @@
 import os
 import re
 import shutil
+import subprocess
+import threading
 import logging
 from dataclasses import dataclass
 from datetime import datetime, date
@@ -69,21 +71,51 @@ if OCR_AVAILABLE:
         pytesseract.pytesseract.tesseract_cmd = _tesseract_cmd
 
 
-def ocr_status():
+def _tesseract_version():
+    """Ask tesseract for its version, without a console window.
+
+    Not pytesseract.get_tesseract_version(): that spawns the binary with a
+    bare check_output, which flashes a terminal window when a windowed app
+    calls it (the OCR calls themselves are properly hidden upstream).
+    """
+    kwargs = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    result = subprocess.run([pytesseract.pytesseract.tesseract_cmd, "--version"],
+                            capture_output=True, text=True, timeout=15, **kwargs)
+    if result.returncode != 0:
+        raise RuntimeError(f"tesseract --version failed: {result.returncode}")
+    first_line = (result.stdout or result.stderr).splitlines()[0]
+    return first_line.split()[1].lstrip("v")
+
+
+_ocr_status_cache = None
+_ocr_status_lock = threading.Lock()
+
+
+def ocr_status(refresh=False):
     """Return (available, detail): whether OCR can actually run, plus a short note.
 
     OCR needs both the Python libraries (Pillow/pytesseract) *and* the Tesseract
     binary, which is searched for at import time (PATH, then the standard
     install folders). pytesseract only fails at call time when the binary is
-    missing, so probe it here for a definitive answer at startup.
+    missing, so probe it once for a definitive answer.
+
+    The probe spawns a process, which is slow enough on Windows to freeze a
+    GUI, so the result is cached for the life of the app: call it once from a
+    background thread and every later call is instant. ``refresh=True``
+    re-probes (e.g. after the user installs Tesseract).
     """
+    global _ocr_status_cache
     if not OCR_AVAILABLE:
         return False, "OCR libraries not installed (Pillow/pytesseract)."
-    try:
-        version = pytesseract.get_tesseract_version()
-        return True, f"Tesseract {version}"
-    except Exception:
-        return False, "Tesseract OCR is not installed."
+    with _ocr_status_lock:
+        if refresh or _ocr_status_cache is None:
+            try:
+                _ocr_status_cache = True, f"Tesseract {_tesseract_version()}"
+            except Exception:
+                _ocr_status_cache = False, "Tesseract OCR is not installed."
+        return _ocr_status_cache
 
 class Sorter:
     def __init__(self, mapping_path, output_dir=None, progress_callback=None, status_callback=None):

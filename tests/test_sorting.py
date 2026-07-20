@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from datetime import date
 
+import unittest.mock
 from unittest.mock import patch
 
 from src import sorter as sorter_mod
@@ -33,6 +34,69 @@ class TestFindTesseract(unittest.TestCase):
              patch.dict(os.environ, {"LOCALAPPDATA": "", "PROGRAMFILES": "",
                                      "PROGRAMFILES(X86)": ""}):
             self.assertIsNone(sorter_mod._find_tesseract())
+
+
+class TestOcrStatus(unittest.TestCase):
+    """ocr_status probes tesseract itself (quietly); pytesseract may be absent
+    on this machine, so stub it."""
+
+    def setUp(self):
+        sorter_mod._ocr_status_cache = None
+
+    def test_returns_bool_and_nonempty_detail(self):
+        available, detail = ocr_status()
+        self.assertIsInstance(available, bool)
+        self.assertIsInstance(detail, str)
+        self.assertTrue(detail)
+
+    def _with_stub(self, run_result=None, run_error=None):
+        stub = type("P", (), {})()
+        stub.pytesseract = type("PP", (), {"tesseract_cmd": "tesseract"})()
+        run = unittest.mock.Mock(side_effect=run_error) if run_error \
+            else unittest.mock.Mock(return_value=run_result)
+        return patch.multiple(sorter_mod, OCR_AVAILABLE=True, create=True,
+                              pytesseract=stub), \
+            patch("src.sorter.subprocess.run", run)
+
+    def test_reports_version_when_tesseract_answers(self):
+        result = subprocess_result("tesseract v5.4.0.20240606\n leptonica-1.84.1\n")
+        stub_ctx, run_ctx = self._with_stub(run_result=result)
+        with stub_ctx, run_ctx:
+            available, detail = ocr_status()
+        self.assertTrue(available)
+        self.assertEqual(detail, "Tesseract 5.4.0.20240606")
+
+    def test_unavailable_when_binary_missing(self):
+        stub_ctx, run_ctx = self._with_stub(run_error=FileNotFoundError())
+        with stub_ctx, run_ctx:
+            available, detail = ocr_status()
+        self.assertFalse(available)
+        self.assertIn("not installed", detail)
+
+    def test_result_is_cached_until_refresh(self):
+        result = subprocess_result("tesseract 5.4.0\n")
+        stub_ctx, run_ctx = self._with_stub(run_result=result)
+        with stub_ctx, run_ctx as run:
+            ocr_status()
+            ocr_status()                      # cached: no second probe
+            self.assertEqual(run.call_count, 1)
+            ocr_status(refresh=True)          # explicit re-probe
+            self.assertEqual(run.call_count, 2)
+
+    def test_windows_probe_suppresses_console_window(self):
+        result = subprocess_result("tesseract 5.4.0\n")
+        stub_ctx, run_ctx = self._with_stub(run_result=result)
+        with stub_ctx, run_ctx as run, patch("src.sorter.os.name", "nt"), \
+                patch("src.sorter.subprocess.CREATE_NO_WINDOW", 0x08000000,
+                      create=True):
+            ocr_status()
+        self.assertEqual(run.call_args.kwargs.get("creationflags"), 0x08000000)
+
+
+def subprocess_result(stdout, returncode=0):
+    r = type("R", (), {})()
+    r.stdout, r.stderr, r.returncode = stdout, "", returncode
+    return r
 
 
 def make_sorter(mapping_data, template_dir):
@@ -524,14 +588,6 @@ class TestCancellation(unittest.TestCase):
         self.s.cancel()
         manifest, count = self.s.execute(plan)
         self.assertEqual((count, manifest), (0, []))
-
-
-class TestOcrStatus(unittest.TestCase):
-    def test_returns_bool_and_nonempty_detail(self):
-        available, detail = ocr_status()
-        self.assertIsInstance(available, bool)
-        self.assertIsInstance(detail, str)
-        self.assertTrue(detail)
 
 
 if __name__ == "__main__":

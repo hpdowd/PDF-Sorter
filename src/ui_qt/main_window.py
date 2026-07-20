@@ -7,8 +7,10 @@ drag-and-drop is native Qt, replacing tkinterdnd2.
 """
 import csv
 import logging
+import json
 import os
 import threading
+import urllib.request
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QPainter
@@ -26,6 +28,33 @@ from src.utils import (DEEP_AUDIT_KEY, FIRST_PAGE_KEY, HIDE_OCR_WARNING_KEY,
                        load_settings, save_settings)
 
 logger = logging.getLogger("ocr_file_sorter.gui")
+
+# Where the Tesseract link sends users when the direct installer download
+# can't be resolved (offline, API down): the current release's page.
+TESSERACT_RELEASES_URL = "https://github.com/UB-Mannheim/tesseract/releases/latest"
+
+
+def resolve_tesseract_download_url():
+    """The direct download URL of the current Tesseract Windows installer.
+
+    Non-technical users get the .exe in one click instead of a wiki page —
+    resolved from the UB-Mannheim releases API because pinned asset URLs rot
+    (their 5.3.3 asset is already a 404). Falls back to the releases page.
+    Network call: run it off the GUI thread. (urllib must be imported at
+    module level: lazily importing it on the worker thread deadlocks against
+    the import machinery while the Qt event loop is running.)
+    """
+    try:
+        api = "https://api.github.com/repos/UB-Mannheim/tesseract/releases/latest"
+        with urllib.request.urlopen(api, timeout=10) as response:
+            release = json.loads(response.read().decode())
+        for asset in release.get("assets", []):
+            if asset["name"].startswith("tesseract-ocr-w64-setup") \
+                    and asset["name"].endswith(".exe"):
+                return asset["browser_download_url"]
+    except Exception as e:
+        logger.info("Tesseract release lookup failed: %s", e)
+    return TESSERACT_RELEASES_URL
 
 
 class FolderList(QListWidget):
@@ -78,6 +107,7 @@ class MainWindow(QMainWindow):
     executeDone = Signal(str)               # summary text
     sortCancelled = Signal()
     undoDone = Signal(int, int)             # (undone, errors)
+    ocrStatusReady = Signal(bool, str, str)  # (available, detail, download url)
 
     def __init__(self):
         super().__init__()
@@ -212,7 +242,15 @@ class MainWindow(QMainWindow):
         dismiss.clicked.connect(self._dismiss_ocr_warning)
         warn_row.addWidget(dismiss, 0, Qt.AlignmentFlag.AlignTop)
         outer.addWidget(self.ocr_warning)
-        self._update_ocr_indicator()
+        # Probing tesseract spawns a process — slow enough on Windows to
+        # freeze the window — so warm sorter's cache off the GUI thread; the
+        # banner appears when the answer arrives, and every later ocr_status()
+        # call (e.g. the About box) is instant. When OCR is missing, the same
+        # thread also resolves the current installer's direct download URL.
+        self.ocr_warning.hide()
+        self._tesseract_dl_url = TESSERACT_RELEASES_URL
+        self.ocrStatusReady.connect(self._apply_ocr_status)
+        threading.Thread(target=self._probe_ocr_status, daemon=True).start()
 
         # --- Status bar ---
         status_row = QHBoxLayout()
@@ -222,6 +260,11 @@ class MainWindow(QMainWindow):
         self.progress_bar = QProgressBar()
         self.progress_bar.setTextVisible(False)
         status_row.addWidget(self.progress_bar, 1)
+
+    def _probe_ocr_status(self):
+        available, detail = sorter.ocr_status()
+        url = "" if available else resolve_tesseract_download_url()
+        self.ocrStatusReady.emit(available, detail, url)
 
     def _build_menubar(self):
         menubar = self.menuBar()
@@ -272,13 +315,24 @@ class MainWindow(QMainWindow):
 
     def _show_about(self):
         available, detail = sorter.ocr_status()
-        ocr_line = detail if available else f"unavailable — {detail}"
-        QMessageBox.information(
-            self, "About OCR File Sorter",
-            f"OCR File Sorter\nVersion {__version__}\n\n"
+        if available:
+            ocr_line = detail
+        else:
+            # The road back to OCR for users who dismissed the warning banner.
+            ocr_line = (
+                f"unavailable — {detail}<br>"
+                f'<a href="{self._tesseract_dl_url}">Download Tesseract</a> — '
+                "run it and choose “install just for me” (no admin needed)")
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("About OCR File Sorter")
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText(
+            f"<b>OCR File Sorter</b><br>Version {__version__}<br><br>"
             "Sorts PDFs into folders based on their text content, "
-            "with an OCR fallback for scanned documents.\n\n"
+            "with an OCR fallback for scanned documents.<br><br>"
             f"OCR: {ocr_line}")
+        box.exec()
 
     # --- mapping / output / folders ---------------------------------------
 
@@ -491,17 +545,18 @@ class MainWindow(QMainWindow):
         self._refresh_undo_state()
         self.status_label.setText("Cancelled")
 
-    def _update_ocr_indicator(self):
+    def _apply_ocr_status(self, available, detail, download_url):
         """Show a persistent warning when OCR (Tesseract) can't run, hide it
         otherwise — or permanently once the user has dismissed it."""
-        available, detail = sorter.ocr_status()
+        if download_url:
+            self._tesseract_dl_url = download_url
         if available or self.settings.get(HIDE_OCR_WARNING_KEY, False):
             self.ocr_warning.hide()
         else:
             self.ocr_warning_label.setText(
                 f"⚠  OCR unavailable — scanned/image PDFs can't be read.  {detail}  "
-                f'<a href="https://github.com/UB-Mannheim/tesseract/wiki">Get Tesseract</a>'
-                " (choose “install just for me” — no admin needed).")
+                f'<a href="{self._tesseract_dl_url}">Download Tesseract</a>'
+                " — run it and choose “install just for me” (no admin needed).")
             self.ocr_warning.show()
 
     def _dismiss_ocr_warning(self):
